@@ -1,0 +1,9 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Basis-Theme: nur für Splash/Window vor dem Compose-Theme.
+         Die eigentliche Optik (Material 3, hell/dunkel) kommt aus Compose. -->
+    <style name="Theme.Gallery" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLayoutInDisplayCutoutMode" tools:targetApi="p">shortEdges</item>
+    </style>
+</resources>
