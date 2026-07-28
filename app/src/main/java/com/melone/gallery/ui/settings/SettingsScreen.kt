@@ -98,9 +98,9 @@ fun SettingsScreen(onBack: () -> Unit) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Server beim Start neu laden", style = MaterialTheme.typography.bodyLarge)
+                    Text("Beim Start mit Server synchronisieren", style = MaterialTheme.typography.bodyLarge)
                     Text(
-                        "Aus: beim Start aus Cache, nur manuell/aktualisieren neu laden.",
+                        "An: bei jedem App-Start einmal neu laden (Cache wird sofort gezeigt, Sync läuft im Hintergrund). Aus: nur Cache, manuell aktualisieren.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

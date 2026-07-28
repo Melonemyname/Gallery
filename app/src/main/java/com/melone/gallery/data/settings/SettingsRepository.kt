@@ -30,8 +30,8 @@ data class UiPrefs(
     val timelineMixed: Boolean = true,
     /** Start-Tab beim App-Start. */
     val startTab: StartTab = StartTab.GALLERY,
-    /** Server-Medien bei jedem App-Start neu laden (sonst aus Cache). */
-    val reloadServerOnStart: Boolean = false,
+    /** Bei jedem App-Start einmal mit dem Server synchronisieren (Standard an). */
+    val reloadServerOnStart: Boolean = true,
     /** Ansicht/Sortierung der Alben-Ansicht – getrennt von der Bilder-Timeline. */
     val albumViewMode: ViewMode = ViewMode.GRID,
     val albumSort: SortOption = SortOption(),
@@ -61,7 +61,7 @@ class SettingsRepository(private val context: Context) {
             gridColumns = (p[KEY_GRID_COLUMNS] ?: 4).coerceIn(2, 8),
             timelineMixed = (p[KEY_TIMELINE_MIXED] ?: 1) == 1,
             startTab = runCatching { StartTab.valueOf(p[KEY_START_TAB] ?: "") }.getOrDefault(StartTab.GALLERY),
-            reloadServerOnStart = (p[KEY_RELOAD_SERVER] ?: 0) == 1,
+            reloadServerOnStart = (p[KEY_RELOAD_SERVER] ?: 1) == 1,
             albumViewMode = runCatching { ViewMode.valueOf(p[KEY_ALBUM_VIEW_MODE] ?: "") }.getOrDefault(ViewMode.GRID),
             albumSort = SortOption(
                 field = runCatching { SortField.valueOf(p[KEY_ALBUM_SORT_FIELD] ?: "") }.getOrDefault(SortField.DATE_TAKEN),
