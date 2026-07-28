@@ -14,7 +14,7 @@ import kotlinx.coroutines.withContext
 class SmbMediaSource(private val smb: SmbManager) {
 
     private val imageExts = setOf("jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "bmp")
-    private val videoExts = setOf("mp4", "mkv", "mov", "avi", "webm", "3gp", "m4v", "ts")
+    private val videoExts = setOf("mp4", "mkv", "mov", "avi", "webm", "3gp", "m4v")
 
     suspend fun query(folders: List<ServerFolder>): List<MediaItem> = withContext(Dispatchers.IO) {
         // Papierkorb je Freigabe von >30 Tage alten Einträgen bereinigen.

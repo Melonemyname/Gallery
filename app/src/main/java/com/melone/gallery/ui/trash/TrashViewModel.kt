@@ -36,7 +36,7 @@ class TrashViewModel(
     private val _loading = MutableStateFlow(false)
     val loading: StateFlow<Boolean> = _loading.asStateFlow()
 
-    private val videoExts = setOf("mp4", "mkv", "mov", "avi", "webm", "3gp", "m4v", "ts")
+    private val videoExts = setOf("mp4", "mkv", "mov", "avi", "webm", "3gp", "m4v")
 
     fun load() {
         viewModelScope.launch {
