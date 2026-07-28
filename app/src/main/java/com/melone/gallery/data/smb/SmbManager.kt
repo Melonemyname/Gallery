@@ -160,6 +160,21 @@ class SmbManager {
             .toList()
     }
 
+    /**
+     * Liest das Versions-Token einer Freigabe (`.galerie-version`, vom Server-Watcher
+     * bei Änderungen aktualisiert). Ein schneller SMB-Read; null, wenn die Datei fehlt
+     * (kein Watcher eingerichtet) oder der Server nicht erreichbar ist.
+     */
+    fun readVersionToken(shareName: String): String? = runCatching {
+        val f = openFile(shareName, ".galerie-version")
+        try {
+            val bytes = f.inputStream.use { it.readBytes() }
+            String(bytes, Charsets.UTF_8).trim().takeIf { it.isNotEmpty() }
+        } finally {
+            runCatching { f.close() }
+        }
+    }.getOrNull()
+
     /** Öffnet eine Datei lesend. Aufrufer schließt sie über [File.close]. */
     fun openFile(shareName: String, path: String): File {
         val ds = shareLocked(shareName)
