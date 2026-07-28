@@ -75,7 +75,19 @@ fun VideoPage(
     var playerView by remember(item.id) { mutableStateOf<PlayerView?>(null) }
 
     val player = remember(item.id) {
-        ExoPlayer.Builder(context).build().apply {
+        // Großzügigere Pufferung, damit Server-Videos (SMB über Tailscale) nicht stottern:
+        // mehr Vorlauf puffern und die Puffergröße nicht an einem Byte-Limit deckeln
+        // (wichtig bei hoher Bitrate wie GoPro/DJI-Rohmaterial).
+        val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                /* minBufferMs = */ 20_000,
+                /* maxBufferMs = */ 120_000,
+                /* bufferForPlaybackMs = */ 2_500,
+                /* bufferForPlaybackAfterRebufferMs = */ 5_000,
+            )
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+        ExoPlayer.Builder(context).setLoadControl(loadControl).build().apply {
             when (item.source) {
                 MediaSource.LOCAL -> {
                     setMediaItem(androidx.media3.common.MediaItem.fromUri(Uri.parse(item.id)))
