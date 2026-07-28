@@ -121,6 +121,21 @@ fun ViewerScreen(
     )
     val currentItem = items[pagerState.currentPage.coerceIn(0, items.lastIndex)]
 
+    // Nachbarbilder (±2) vorausladen, damit Weiterswipen ohne Wartezeit ist.
+    LaunchedEffect(pagerState.currentPage) {
+        val loader = coil.Coil.imageLoader(context)
+        val cur = pagerState.currentPage
+        listOf(cur + 1, cur - 1, cur + 2, cur - 2).forEach { idx ->
+            items.getOrNull(idx)?.let { neighbor ->
+                if (!neighbor.isVideo) {
+                    loader.enqueue(
+                        coil.request.ImageRequest.Builder(context).data(neighbor.coilModel).build(),
+                    )
+                }
+            }
+        }
+    }
+
     var showInfo by remember { mutableStateOf(false) }
     var sharing by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
@@ -279,7 +294,8 @@ fun ViewerScreen(
             HorizontalPager(
                 state = pagerState,
                 modifier = Modifier.fillMaxSize(),
-                beyondViewportPageCount = 0,
+                // Nachbarseiten schon mitkomponieren → deren Bild lädt vorab.
+                beyondViewportPageCount = 1,
             ) { page ->
                 val item = items[page]
                 val isActive = page == pagerState.currentPage
@@ -292,12 +308,22 @@ fun ViewerScreen(
                         bottomInset = insetBottom.value,
                     )
                 } else {
-                    ZoomableAsyncImage(
-                        model = item.coilModel,
-                        contentDescription = item.displayName,
-                        modifier = Modifier.fillMaxSize(),
-                        onClick = { chromeVisible = !chromeVisible },
-                    )
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        // Schnelles Thumbnail als Sofort-Vorschau (meist schon im Cache),
+                        // darüber lädt das Original in voller Auflösung nach.
+                        coil.compose.AsyncImage(
+                            model = item.thumbModel,
+                            contentDescription = null,
+                            contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                        ZoomableAsyncImage(
+                            model = item.coilModel,
+                            contentDescription = item.displayName,
+                            modifier = Modifier.fillMaxSize(),
+                            onClick = { chromeVisible = !chromeVisible },
+                        )
+                    }
                 }
             }
 
