@@ -69,17 +69,18 @@ class GalleryViewModel(
                     lastServerFolders = config.folders
                     if (!initialServerHandled) {
                         initialServerHandled = true
-                        // Beim ersten Mal: aus Cache anzeigen, außer "beim Start neu laden".
                         val reloadOnStart = settings.uiPrefs.first().reloadServerOnStart
                         val cached = if (config.folders.isEmpty()) emptyList() else serverCache.load()
-                        if (cached.isNotEmpty() && !reloadOnStart) {
+                        // Cache sofort zeigen (schneller Start), damit die Liste beim Sync nicht leer ist.
+                        if (cached.isNotEmpty()) {
                             _state.update { it.copy(serverItems = cached) }
-                            // Token primen, damit der sofortige ON_RESUME nicht unnötig neu lädt
-                            // (respektiert "nicht bei jedem Start neu laden").
                             lastTokens = runCatching { repo.serverTokens(config.folders.map { it.share }) }
                                 .getOrDefault(emptyMap())
                             serverPrimed = true
-                        } else {
+                        }
+                        // Beim Start einmal mit dem Server synchronisieren (Standard an;
+                        // ohne Cache sowieso, damit überhaupt etwas geladen wird).
+                        if (reloadOnStart || cached.isEmpty()) {
                             loadServer(config.folders)
                         }
                     } else {
