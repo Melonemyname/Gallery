@@ -1,0 +1,26 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+build/
+.kotlin/
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Referenz-APK (große Binärdatei, gehört nicht ins Repo)
+*.apk
+
+# Signing / Secrets (nie ins öffentliche Repo)
+*.jks
+*.keystore
+keystore.properties
+google-services.json
+
+# Interne Notizen/Spezifikation mit persönlichen Infrastruktur-Daten
+# (Tailscale-IP, Server-Host, Samba-User) – nicht ins öffentliche Repo
+/CLAUDE.md
+/SPEC.md

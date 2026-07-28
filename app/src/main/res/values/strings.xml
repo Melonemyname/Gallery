@@ -1,0 +1,24 @@
+<resources>
+    <string name="app_name">Galerie</string>
+
+    <!-- Navigation -->
+    <string name="nav_pictures">Bilder</string>
+    <string name="nav_albums">Alben</string>
+    <string name="nav_settings">Einstellungen</string>
+
+    <!-- Permissions -->
+    <string name="perm_rationale_title">Zugriff auf Medien</string>
+    <string name="perm_rationale_text">Die App braucht Zugriff auf deine Fotos und Videos, um die Galerie anzuzeigen.</string>
+    <string name="perm_grant">Zugriff erlauben</string>
+    <string name="perm_open_settings">Einstellungen öffnen</string>
+
+    <!-- Settings -->
+    <string name="settings_server_title">Server (SMB / Tailscale)</string>
+    <string name="settings_host">Host</string>
+    <string name="settings_user">Benutzer</string>
+    <string name="settings_password">Passwort</string>
+    <string name="settings_test_connection">Verbindung testen</string>
+    <string name="settings_folders">Server-Ordner</string>
+    <string name="settings_add_folder">Ordner hinzufügen</string>
+    <string name="settings_save">Speichern</string>
+</resources>

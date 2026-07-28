@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Für lokale Medien -->
+    <external-path name="external_files" path="." />
+    <!-- Server-Dateien werden vor dem Teilen hierhin gecacht -->
+    <cache-path name="shared_cache" path="shared/" />
+    <files-path name="internal_files" path="." />
+</paths>
