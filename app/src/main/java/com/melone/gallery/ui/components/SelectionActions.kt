@@ -255,46 +255,15 @@ fun BoxScope.SelectionActionsBar(
     }
 
     if (showDest) {
-        SelectionDestinationDialog(
+        ServerFolderPickerDialog(
+            smb = app.container.smbManager,
             move = pendingMove,
             serverFolders = serverFolders,
             onDismiss = { showDest = false },
             onPickLocal = { showDest = false; treeLauncher.launch(null) },
-            onPickServer = { folder -> showDest = false; runBatch(TransferTarget.Server(folder.share, folder.rootPath), pendingMove) },
+            onPickServer = { share, path -> showDest = false; runBatch(TransferTarget.Server(share, path), pendingMove) },
         )
     }
-}
-
-@Composable
-private fun SelectionDestinationDialog(
-    move: Boolean,
-    serverFolders: List<ServerFolder>,
-    onDismiss: () -> Unit,
-    onPickLocal: () -> Unit,
-    onPickServer: (ServerFolder) -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (move) "Verschieben nach…" else "Kopieren nach…") },
-        text = {
-            Column {
-                Text(
-                    "Auf dem Gerät (Ordner wählen)…",
-                    style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.fillMaxWidth().clickable(onClick = onPickLocal).padding(vertical = 12.dp),
-                )
-                serverFolders.forEach { folder ->
-                    Text(
-                        "Server: ${folder.label}",
-                        style = MaterialTheme.typography.bodyLarge,
-                        modifier = Modifier.fillMaxWidth().clickable { onPickServer(folder) }.padding(vertical = 12.dp),
-                    )
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Abbrechen") } },
-    )
 }
 
 /** content-URI zum Teilen (lokal direkt, Server über Cache-Kopie). */
