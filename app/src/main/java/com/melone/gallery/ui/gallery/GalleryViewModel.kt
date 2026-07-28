@@ -46,6 +46,10 @@ class GalleryViewModel(
 
     private var lastServerFolders: List<ServerFolder>? = null
     private var initialServerHandled = false
+    /** Zuletzt gesehene Versions-Token je Freigabe (für den Reload-bei-Änderung-Check). */
+    private var lastTokens: Map<String, String> = emptyMap()
+    /** Erst nach der ersten Server-Ladung/Cache-Primung darf der Resume-Check laufen. */
+    private var serverPrimed = false
 
     /** Liste, über die der Viewer blättert (vom aufrufenden Screen gesetzt). */
     private var viewerList: List<MediaItem> = emptyList()
@@ -70,6 +74,11 @@ class GalleryViewModel(
                         val cached = if (config.folders.isEmpty()) emptyList() else serverCache.load()
                         if (cached.isNotEmpty() && !reloadOnStart) {
                             _state.update { it.copy(serverItems = cached) }
+                            // Token primen, damit der sofortige ON_RESUME nicht unnötig neu lädt
+                            // (respektiert "nicht bei jedem Start neu laden").
+                            lastTokens = runCatching { repo.serverTokens(config.folders.map { it.share }) }
+                                .getOrDefault(emptyMap())
+                            serverPrimed = true
                         } else {
                             loadServer(config.folders)
                         }
@@ -113,7 +122,13 @@ class GalleryViewModel(
             _state.update { it.copy(loadingServer = true, serverError = null) }
             val result = runCatching { repo.loadServer(folders) }
             lastServerLoadAt = android.os.SystemClock.elapsedRealtime()
-            result.getOrNull()?.let { items -> runCatching { serverCache.save(items) } }
+            result.getOrNull()?.let { items ->
+                runCatching { serverCache.save(items) }
+                // Aktuellen Stand der Versions-Token merken (für den Änderungs-Check).
+                lastTokens = runCatching { repo.serverTokens(folders.map { it.share }) }
+                    .getOrDefault(lastTokens)
+            }
+            serverPrimed = true
             _state.update {
                 it.copy(
                     loadingServer = false,
@@ -137,17 +152,26 @@ class GalleryViewModel(
     }
 
     /**
-     * Aktualisiert den Server, wenn die App wieder in den Vordergrund kommt
-     * (gedrosselt auf einmal pro Minute). So verschwinden serverseitig gelöschte
-     * Dateien, ohne bei jedem Wechsel neu zu laden.
+     * Aktualisiert den Server, wenn die App wieder in den Vordergrund kommt.
+     * Bevorzugt den billigen Änderungs-Check über die Versions-Datei (`.galerie-version`):
+     * es wird nur dann komplett neu gelistet, wenn sich auf dem Server wirklich etwas
+     * geändert hat. Existiert kein Token (kein Server-Watcher eingerichtet), fällt es auf
+     * das bisherige Verhalten zurück (zeitgedrosselt einmal pro Minute komplett neu laden).
      */
     fun refreshServerOnResume() {
         val folders = _state.value.serverFolders
-        if (folders.isNotEmpty() &&
-            !_state.value.loadingServer &&
-            android.os.SystemClock.elapsedRealtime() - lastServerLoadAt > 60_000
-        ) {
-            loadServer(folders)
+        if (folders.isEmpty() || _state.value.loadingServer || !serverPrimed) return
+        viewModelScope.launch {
+            val shares = folders.map { it.share }.distinct()
+            val tokens = runCatching { repo.serverTokens(shares) }.getOrDefault(emptyMap())
+            if (tokens.isNotEmpty()) {
+                // Token vorhanden → nur laden, wenn sich eines geändert hat.
+                val changed = tokens.any { (share, tok) -> lastTokens[share] != tok }
+                if (changed) loadServer(folders)
+            } else if (android.os.SystemClock.elapsedRealtime() - lastServerLoadAt > 60_000) {
+                // Kein Token/Watcher → altes zeitgedrosseltes Verhalten.
+                loadServer(folders)
+            }
         }
     }
 

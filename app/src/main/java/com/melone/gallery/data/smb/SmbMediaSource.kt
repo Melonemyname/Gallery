@@ -16,6 +16,15 @@ class SmbMediaSource(private val smb: SmbManager) {
     private val imageExts = setOf("jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "bmp")
     private val videoExts = setOf("mp4", "mkv", "mov", "avi", "webm", "3gp", "m4v")
 
+    /** Versions-Token je Freigabe lesen (für den Änderungs-Check beim Reload). */
+    suspend fun versionTokens(shares: List<String>): Map<String, String> = withContext(Dispatchers.IO) {
+        buildMap {
+            shares.distinct().forEach { share ->
+                smb.readVersionToken(share)?.let { put(share, it) }
+            }
+        }
+    }
+
     suspend fun query(folders: List<ServerFolder>): List<MediaItem> = withContext(Dispatchers.IO) {
         // Papierkorb je Freigabe von >30 Tage alten Einträgen bereinigen.
         val cutoff = System.currentTimeMillis() - 30L * 24 * 60 * 60 * 1000

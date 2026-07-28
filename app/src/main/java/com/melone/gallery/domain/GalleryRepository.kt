@@ -19,4 +19,7 @@ class GalleryRepository(
         if (folders.isEmpty()) return emptyList()
         return smb.query(folders)
     }
+
+    /** Versions-Token je Freigabe (`.galerie-version`) für den Änderungs-Check. */
+    suspend fun serverTokens(shares: List<String>): Map<String, String> = smb.versionTokens(shares)
 }
