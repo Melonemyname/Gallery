@@ -53,7 +53,7 @@ fun MediaThumbnail(
         }
         AsyncImage(
             model = ImageRequest.Builder(context)
-                .data(item.coilModel)
+                .data(item.thumbModel)
                 .crossfade(true)
                 .build(),
             contentDescription = item.displayName,

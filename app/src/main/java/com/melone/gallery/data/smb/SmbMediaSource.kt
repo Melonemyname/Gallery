@@ -44,6 +44,7 @@ class SmbMediaSource(private val smb: SmbManager) {
 
             if (e.isDirectory) {
                 if (e.name == ".trash") continue // Papierkorb nicht anzeigen
+                if (e.name == ".thumbs") continue // vorgenerierte Vorschaubilder nicht anzeigen
                 if (recursive) walk(share, rel, excludes, recursive, out, depth + 1)
                 continue
             }
