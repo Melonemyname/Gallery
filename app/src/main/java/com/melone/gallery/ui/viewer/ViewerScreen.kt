@@ -405,14 +405,15 @@ fun ViewerScreen(
     }
 
     if (showDest) {
-        DestinationPickerDialog(
+        com.melone.gallery.ui.components.ServerFolderPickerDialog(
+            smb = app.container.smbManager,
             move = pendingMove,
             serverFolders = serverConfig.folders,
             onDismiss = { showDest = false },
             onPickLocal = { showDest = false; treeLauncher.launch(null) },
-            onPickServer = { folder ->
+            onPickServer = { share, path ->
                 showDest = false
-                pendingItem?.let { runTransfer(it, TransferTarget.Server(folder.share, folder.rootPath), pendingMove) }
+                pendingItem?.let { runTransfer(it, TransferTarget.Server(share, path), pendingMove) }
             },
         )
     }
@@ -546,50 +547,3 @@ private suspend fun setAsWallpaper(context: android.content.Context, item: Media
     }
 }
 
-@Composable
-private fun DestinationPickerDialog(
-    move: Boolean,
-    serverFolders: List<ServerFolder>,
-    onDismiss: () -> Unit,
-    onPickLocal: () -> Unit,
-    onPickServer: (ServerFolder) -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (move) "Verschieben nach…" else "Kopieren nach…") },
-        text = {
-            Column {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(onClick = onPickLocal)
-                        .padding(vertical = 12.dp),
-                ) {
-                    Icon(Icons.Filled.Smartphone, contentDescription = null)
-                    Text("  Auf dem Gerät (Ordner wählen)…", style = MaterialTheme.typography.bodyLarge)
-                }
-                if (serverFolders.isNotEmpty()) {
-                    Text(
-                        "Server",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
-                    )
-                    serverFolders.forEach { folder ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onPickServer(folder) }
-                                .padding(vertical = 12.dp),
-                        ) {
-                            Icon(Icons.Filled.Folder, contentDescription = null)
-                            Text("  ${folder.label}", style = MaterialTheme.typography.bodyLarge)
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Abbrechen") } },
-    )
-}
