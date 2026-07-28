@@ -144,7 +144,9 @@ fun BoxScope.SelectionActionsBar(
         }
         pendingLocalIds = emptyList(); onClear()
     }
-    val moveTrashLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { r ->
+    // Beim Verschieben wird das lokale Original nach dem Kopieren endgültig gelöscht
+    // (NICHT in den Papierkorb) – es liegt ja schon auf dem Server.
+    val moveDeleteLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { r ->
         if (r.resultCode == android.app.Activity.RESULT_OK) viewModel.removeLocalItems(pendingLocalIds.toSet())
         pendingLocalIds = emptyList(); onClear()
     }
@@ -169,8 +171,9 @@ fun BoxScope.SelectionActionsBar(
             toast(if (move) "$ok verschoben" else "$ok kopiert")
             if (move && localMoveIds.isNotEmpty() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 pendingLocalIds = localMoveIds
-                val pi = MediaStore.createTrashRequest(context.contentResolver, localMoveIds.map { Uri.parse(it) }, true)
-                moveTrashLauncher.launch(IntentSenderRequest.Builder(pi.intentSender).build())
+                // Endgültig vom Gerät löschen (nicht in den Papierkorb).
+                val pi = MediaStore.createDeleteRequest(context.contentResolver, localMoveIds.map { Uri.parse(it) })
+                moveDeleteLauncher.launch(IntentSenderRequest.Builder(pi.intentSender).build())
             } else onClear()
         }
     }
