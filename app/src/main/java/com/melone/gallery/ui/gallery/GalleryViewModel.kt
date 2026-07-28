@@ -182,6 +182,8 @@ class GalleryViewModel(
     fun setSourceFilter(f: SourceFilter) = viewModelScope.launch { settings.setSourceFilter(f) }
     fun setGridColumns(c: Int) = viewModelScope.launch { settings.setGridColumns(c) }
     fun setTimelineMixed(mixed: Boolean) = viewModelScope.launch { settings.setTimelineMixed(mixed) }
+    fun setAlbumViewMode(mode: ViewMode) = viewModelScope.launch { settings.setAlbumViewMode(mode) }
+    fun setAlbumSort(s: SortOption) = viewModelScope.launch { settings.setAlbumSort(s) }
 
     /** Nach Quelle gefilterte + sortierte Liste (Grundlage für Timeline & Viewer). */
     fun visibleItems(): List<MediaItem> = computeVisible(_state.value)

@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.GridView
@@ -80,11 +81,14 @@ fun AlbumsScreen(
     // ausgeblendet werden kann):
     //  "" = Wurzel, "L:<albumId>" = lokales Album, "S:<pfad>" = Server-Ordner.
 
-    val localAlbums = remember(state.localItems, state.prefs.sort) {
-        GalleryGrouping.albums(GalleryViewModel.itemsForSource(state, MediaSource.LOCAL))
+    // Alben nutzen eine eigene Sortierung/Ansicht (getrennt von der Bilder-Timeline).
+    val albumSort = state.prefs.albumSort
+    val albumViewMode = state.prefs.albumViewMode
+    val localAlbums = remember(state.localItems, albumSort) {
+        GalleryGrouping.albums(GalleryGrouping.sort(state.localItems, albumSort))
     }
-    val serverItems = remember(state.serverItems, state.prefs.sort) {
-        GalleryViewModel.itemsForSource(state, MediaSource.SERVER)
+    val serverItems = remember(state.serverItems, albumSort) {
+        GalleryGrouping.sort(state.serverItems, albumSort)
     }
 
     // Auswahlmodus (langes Halten) innerhalb eines Albums/Ordners.
@@ -119,9 +123,11 @@ fun AlbumsScreen(
                 } else {
                     LocalAlbumLevel(
                         album = album,
-                        viewMode = state.prefs.viewMode,
+                        viewMode = albumViewMode,
                         columns = state.prefs.gridColumns,
-                        onSetViewMode = viewModel::setViewMode,
+                        onSetViewMode = viewModel::setAlbumViewMode,
+                        sort = albumSort,
+                        onSetSort = viewModel::setAlbumSort,
                         onBack = { onNavChange("") },
                         onOpenViewer = onOpenViewer,
                         selected = selected,
@@ -137,9 +143,11 @@ fun AlbumsScreen(
                 ServerFolderLevel(
                     path = path,
                     serverItems = serverItems,
-                    viewMode = state.prefs.viewMode,
+                    viewMode = albumViewMode,
                     columns = state.prefs.gridColumns,
-                    onSetViewMode = viewModel::setViewMode,
+                    onSetViewMode = viewModel::setAlbumViewMode,
+                    sort = albumSort,
+                    onSetSort = viewModel::setAlbumSort,
                     onEnter = { child -> onNavChange("S:$child") },
                     onBack = {
                         onNavChange(if (path.contains('/')) "S:" + path.substringBeforeLast('/') else "")
@@ -238,6 +246,8 @@ private fun ServerFolderLevel(
     viewMode: ViewMode,
     columns: Int,
     onSetViewMode: (ViewMode) -> Unit,
+    sort: com.melone.gallery.data.model.SortOption,
+    onSetSort: (com.melone.gallery.data.model.SortOption) -> Unit,
     onEnter: (String) -> Unit,
     onBack: () -> Unit,
     onOpenViewer: (List<MediaItem>, Int) -> Unit,
@@ -263,7 +273,10 @@ private fun ServerFolderLevel(
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Zurück")
                 }
             },
-            actions = { ViewModeButton(viewMode, onSetViewMode) },
+            actions = {
+                SortButton(sort, onSetSort)
+                ViewModeButton(viewMode, onSetViewMode)
+            },
         )
     }
 
@@ -339,6 +352,8 @@ private fun LocalAlbumLevel(
     viewMode: ViewMode,
     columns: Int,
     onSetViewMode: (ViewMode) -> Unit,
+    sort: com.melone.gallery.data.model.SortOption,
+    onSetSort: (com.melone.gallery.data.model.SortOption) -> Unit,
     onBack: () -> Unit,
     onOpenViewer: (List<MediaItem>, Int) -> Unit,
     selected: Set<String>,
@@ -361,7 +376,10 @@ private fun LocalAlbumLevel(
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Zurück")
                 }
             },
-            actions = { ViewModeButton(viewMode, onSetViewMode) },
+            actions = {
+                SortButton(sort, onSetSort)
+                ViewModeButton(viewMode, onSetViewMode)
+            },
         )
     }
 
@@ -410,6 +428,52 @@ private fun LocalAlbumLevel(
             )
         }
     }
+}
+
+@Composable
+private fun SortButton(
+    sort: com.melone.gallery.data.model.SortOption,
+    onSet: (com.melone.gallery.data.model.SortOption) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }) {
+            Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "Sortieren")
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            SortMenuItem("Erstellt am", com.melone.gallery.data.model.SortField.DATE_TAKEN, sort, onSet) { open = false }
+            SortMenuItem("Geändert am", com.melone.gallery.data.model.SortField.DATE_MODIFIED, sort, onSet) { open = false }
+            SortMenuItem("Name", com.melone.gallery.data.model.SortField.NAME, sort, onSet) { open = false }
+            androidx.compose.material3.HorizontalDivider()
+            DropdownMenuItem(
+                text = {
+                    Text(
+                        if (sort.direction == com.melone.gallery.data.model.SortDirection.DESC) "Aufsteigend" else "Absteigend",
+                    )
+                },
+                onClick = {
+                    val dir = if (sort.direction == com.melone.gallery.data.model.SortDirection.DESC)
+                        com.melone.gallery.data.model.SortDirection.ASC
+                    else com.melone.gallery.data.model.SortDirection.DESC
+                    onSet(sort.copy(direction = dir)); open = false
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun SortMenuItem(
+    label: String,
+    field: com.melone.gallery.data.model.SortField,
+    current: com.melone.gallery.data.model.SortOption,
+    onSet: (com.melone.gallery.data.model.SortOption) -> Unit,
+    dismiss: () -> Unit,
+) {
+    DropdownMenuItem(
+        text = { Text(label + if (current.field == field) "  ✓" else "") },
+        onClick = { onSet(current.copy(field = field)); dismiss() },
+    )
 }
 
 @Composable

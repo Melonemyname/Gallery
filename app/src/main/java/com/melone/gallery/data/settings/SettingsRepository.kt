@@ -32,6 +32,9 @@ data class UiPrefs(
     val startTab: StartTab = StartTab.GALLERY,
     /** Server-Medien bei jedem App-Start neu laden (sonst aus Cache). */
     val reloadServerOnStart: Boolean = false,
+    /** Ansicht/Sortierung der Alben-Ansicht – getrennt von der Bilder-Timeline. */
+    val albumViewMode: ViewMode = ViewMode.GRID,
+    val albumSort: SortOption = SortOption(),
 )
 
 class SettingsRepository(private val context: Context) {
@@ -59,6 +62,11 @@ class SettingsRepository(private val context: Context) {
             timelineMixed = (p[KEY_TIMELINE_MIXED] ?: 1) == 1,
             startTab = runCatching { StartTab.valueOf(p[KEY_START_TAB] ?: "") }.getOrDefault(StartTab.GALLERY),
             reloadServerOnStart = (p[KEY_RELOAD_SERVER] ?: 0) == 1,
+            albumViewMode = runCatching { ViewMode.valueOf(p[KEY_ALBUM_VIEW_MODE] ?: "") }.getOrDefault(ViewMode.GRID),
+            albumSort = SortOption(
+                field = runCatching { SortField.valueOf(p[KEY_ALBUM_SORT_FIELD] ?: "") }.getOrDefault(SortField.DATE_TAKEN),
+                direction = runCatching { SortDirection.valueOf(p[KEY_ALBUM_SORT_DIR] ?: "") }.getOrDefault(SortDirection.DESC),
+            ),
         )
     }
 
@@ -99,6 +107,14 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setReloadServerOnStart(enabled: Boolean) =
         context.dataStore.edit { it[KEY_RELOAD_SERVER] = if (enabled) 1 else 0 }
+
+    suspend fun setAlbumViewMode(mode: ViewMode) =
+        context.dataStore.edit { it[KEY_ALBUM_VIEW_MODE] = mode.name }
+
+    suspend fun setAlbumSort(sort: SortOption) = context.dataStore.edit {
+        it[KEY_ALBUM_SORT_FIELD] = sort.field.name
+        it[KEY_ALBUM_SORT_DIR] = sort.direction.name
+    }
 
     // --- JSON (de)serialisierung der Ordnerliste via org.json ---
 
@@ -145,5 +161,8 @@ class SettingsRepository(private val context: Context) {
         val KEY_TIMELINE_MIXED = intPreferencesKey("timeline_mixed")
         val KEY_START_TAB = stringPreferencesKey("start_tab")
         val KEY_RELOAD_SERVER = intPreferencesKey("reload_server_on_start")
+        val KEY_ALBUM_VIEW_MODE = stringPreferencesKey("album_view_mode")
+        val KEY_ALBUM_SORT_FIELD = stringPreferencesKey("album_sort_field")
+        val KEY_ALBUM_SORT_DIR = stringPreferencesKey("album_sort_dir")
     }
 }
