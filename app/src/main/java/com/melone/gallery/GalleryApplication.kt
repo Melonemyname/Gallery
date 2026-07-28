@@ -7,6 +7,7 @@ import coil.decode.VideoFrameDecoder
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import com.melone.gallery.data.smb.SmbCoilFetcher
+import com.melone.gallery.data.smb.SmbThumbFetcher
 import com.melone.gallery.data.smb.SmbVideoFetcher
 
 class GalleryApplication : Application(), ImageLoaderFactory {
@@ -23,6 +24,7 @@ class GalleryApplication : Application(), ImageLoaderFactory {
     override fun newImageLoader(): ImageLoader {
         return ImageLoader.Builder(this)
             .components {
+                add(SmbThumbFetcher.Factory(container.smbManager))
                 add(SmbCoilFetcher.Factory(container.smbManager))
                 add(SmbVideoFetcher.Factory(container.smbManager))
                 add(VideoFrameDecoder.Factory())
