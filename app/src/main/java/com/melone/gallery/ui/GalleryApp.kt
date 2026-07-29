@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.dp
 import com.melone.gallery.ui.components.landscape16by9
 import com.melone.gallery.ui.components.landscapeSideInset
 import androidx.compose.material.icons.Icons
@@ -212,14 +214,34 @@ private fun MainScaffold(
     onSelectTab: (String) -> Unit = {},
     content: @Composable (androidx.compose.foundation.layout.PaddingValues) -> Unit,
 ) {
+    // Untere Navigation beim Scrollen aus-/einblenden (wie die Kopfzeile).
+    var barsVisible by remember { mutableStateOf(true) }
+    val hideOnScroll = remember {
+        object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
+            override fun onPreScroll(
+                available: androidx.compose.ui.geometry.Offset,
+                source: androidx.compose.ui.input.nestedscroll.NestedScrollSource,
+            ): androidx.compose.ui.geometry.Offset {
+                if (available.y < -3f) barsVisible = false   // runter scrollen → ausblenden
+                if (available.y > 3f) barsVisible = true     // hoch scrollen → einblenden
+                return androidx.compose.ui.geometry.Offset.Zero
+            }
+        }
+    }
+    // Beim Verlassen/Wechsel wieder einblenden, damit die Leiste nie "verloren" wirkt.
+    LaunchedEffect(showBottomBar, currentRoute) { if (!showBottomBar) barsVisible = true }
+
     androidx.compose.material3.Scaffold(
         floatingActionButton = {
             if (showBottomBar) {
                 // Im Querformat auf die Linie des 16:9-Inhalts einrücken (der FAB sitzt
-                // im Scaffold-Slot, also außerhalb des begrenzten Bereichs).
+                // im Scaffold-Slot, also außerhalb des begrenzten Bereichs). Etwa eine
+                // halbe FAB-Breite wieder nach außen, damit er nicht zu weit innen sitzt.
                 FloatingActionButton(
                     onClick = { navController.navigate(Routes.TRASH) },
-                    modifier = Modifier.padding(end = landscapeSideInset()),
+                    modifier = Modifier.padding(
+                        end = (landscapeSideInset() - 28.dp).coerceAtLeast(0.dp),
+                    ),
                 ) {
                     Icon(Icons.Filled.Delete, contentDescription = "Papierkorb")
                 }
@@ -227,6 +249,11 @@ private fun MainScaffold(
         },
         bottomBar = {
             if (showBottomBar) {
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = barsVisible,
+                    enter = androidx.compose.animation.slideInVertically { it } + androidx.compose.animation.fadeIn(),
+                    exit = androidx.compose.animation.slideOutVertically { it } + androidx.compose.animation.fadeOut(),
+                ) {
                 NavigationBar {
                     val tabs = listOf(
                         TopTab(Routes.GALLERY, R.string.nav_pictures),
@@ -259,13 +286,16 @@ private fun MainScaffold(
                         )
                     }
                 }
+                }
             }
         },
     ) { padding ->
         // Im Querformat den Inhalt auf 16:9 begrenzen und zentrieren, damit nichts
         // bis an die Ränder (und unter die Systemleisten) läuft.
         Box(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .nestedScroll(hideOnScroll),
             contentAlignment = Alignment.TopCenter,
         ) {
             // Reihenfolge wichtig: erst begrenzen, dann füllen (sonst legt fillMaxSize
