@@ -89,6 +89,7 @@ import com.melone.gallery.data.settings.ServerFolder
 import com.melone.gallery.data.transfer.TransferTarget
 import com.melone.gallery.domain.MediaDetails
 import com.melone.gallery.ui.AppViewModelFactories
+import com.melone.gallery.ui.components.landscape16by9
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -349,6 +350,7 @@ fun ViewerScreen(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .alpha(chromeAlpha)
+                        .landscape16by9()
                         .padding(top = insetTop.value, start = insetLeft.value, end = insetRight.value),
                     windowInsets = WindowInsets(0, 0, 0, 0),
                     title = { Text(currentItem.displayName, color = Color.White, maxLines = 1) },

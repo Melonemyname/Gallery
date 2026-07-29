@@ -47,6 +47,7 @@ import com.melone.gallery.data.model.MediaItem
 import com.melone.gallery.data.model.MediaSource
 import com.melone.gallery.data.smb.SmbDataSource
 import com.melone.gallery.ui.components.MediaThumbnail
+import com.melone.gallery.ui.components.landscape16by9
 import kotlinx.coroutines.delay
 
 /**
@@ -204,8 +205,9 @@ private fun VideoControls(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            // Über den schwebenden Info/Teilen/Löschen-Buttons und der Navigationsleiste;
-            // im Querformat links/rechts an den Systemleisten/Kamera-Ausschnitt anpassen.
+            // Im Querformat auf 16:9 begrenzen (wie das Videobild), sonst zieht sich die
+            // Steuerung über die ganze Breite bis unter die Systemleisten.
+            .landscape16by9()
             .padding(start = 12.dp + leftInset, end = 12.dp + rightInset, top = 8.dp, bottom = bottomInset + 88.dp),
     ) {
         Box(modifier = Modifier.fillMaxWidth()) {

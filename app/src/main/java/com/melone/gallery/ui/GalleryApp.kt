@@ -7,7 +7,11 @@ import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.ExitTransition
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.Alignment
+import com.melone.gallery.ui.components.landscape16by9
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Collections
 import androidx.compose.material.icons.filled.Delete
@@ -252,6 +256,15 @@ private fun MainScaffold(
             }
         },
     ) { padding ->
-        content(padding)
+        // Im Querformat den Inhalt auf 16:9 begrenzen und zentrieren, damit nichts
+        // bis an die Ränder (und unter die Systemleisten) läuft.
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.TopCenter,
+        ) {
+            Box(modifier = Modifier.fillMaxSize().landscape16by9()) {
+                content(padding)
+            }
+        }
     }
 }
