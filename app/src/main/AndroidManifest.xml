@@ -14,6 +14,26 @@
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
+    <!--
+      Ab Android 11 sieht die App fremde Apps nur, wenn sie hier deklariert, wonach
+      sie sucht. Ohne das schlägt "Bearbeiten mit…" fehl, obwohl ein Editor
+      (z. B. Samsung-Galerie) installiert ist.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.EDIT" />
+            <data android:mimeType="image/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.ATTACH_DATA" />
+            <data android:mimeType="image/*" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SEND" />
+            <data android:mimeType="*/*" />
+        </intent>
+    </queries>
+
     <application
         android:name=".GalleryApplication"
         android:allowBackup="true"
