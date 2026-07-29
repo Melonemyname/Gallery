@@ -23,3 +23,17 @@ fun Modifier.landscape16by9(): Modifier {
         this
     }
 }
+
+/**
+ * Seitlicher Rand, der durch [landscape16by9] frei bleibt (je Seite). Für Elemente,
+ * die außerhalb des begrenzten Inhalts positioniert werden (z. B. der Papierkorb-FAB
+ * im Scaffold-Slot), damit sie auf einer Linie mit dem Inhalt sitzen.
+ */
+@Composable
+fun landscapeSideInset(): androidx.compose.ui.unit.Dp {
+    val config = LocalConfiguration.current
+    if (config.orientation != Configuration.ORIENTATION_LANDSCAPE) return 0.dp
+    val allowed = config.screenHeightDp * 16f / 9f
+    val extra = (config.screenWidthDp - allowed) / 2f
+    return if (extra > 0f) extra.dp else 0.dp
+}

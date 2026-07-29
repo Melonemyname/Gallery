@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.Alignment
 import com.melone.gallery.ui.components.landscape16by9
+import com.melone.gallery.ui.components.landscapeSideInset
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Collections
 import androidx.compose.material.icons.filled.Delete
@@ -214,7 +215,12 @@ private fun MainScaffold(
     androidx.compose.material3.Scaffold(
         floatingActionButton = {
             if (showBottomBar) {
-                FloatingActionButton(onClick = { navController.navigate(Routes.TRASH) }) {
+                // Im Querformat auf die Linie des 16:9-Inhalts einrücken (der FAB sitzt
+                // im Scaffold-Slot, also außerhalb des begrenzten Bereichs).
+                FloatingActionButton(
+                    onClick = { navController.navigate(Routes.TRASH) },
+                    modifier = Modifier.padding(end = landscapeSideInset()),
+                ) {
                     Icon(Icons.Filled.Delete, contentDescription = "Papierkorb")
                 }
             }
