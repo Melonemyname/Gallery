@@ -550,28 +550,49 @@ fun ViewerScreen(
     }
 
     editedFound?.let { (orig, editedUri) ->
-        val editedName = displayNameOf(context, editedUri) ?: "Bearbeitete Datei"
+        fun upload(overwrite: Boolean) {
+            editedFound = null
+            scope.launch {
+                transferring = true
+                val ok = withContext(Dispatchers.IO) {
+                    uploadEditedToServer(context, orig, editedUri, overwrite)
+                }
+                transferring = false
+                toast(
+                    when {
+                        !ok -> "Speichern auf dem Server fehlgeschlagen"
+                        overwrite -> "Original auf dem Server ersetzt"
+                        else -> "Als Kopie auf dem Server gespeichert"
+                    },
+                )
+                if (ok && overwrite) {
+                    // Zwischenspeicher für dieses Bild verwerfen, sonst zeigt die App
+                    // weiter die alte Fassung.
+                    runCatching {
+                        coil.Coil.imageLoader(context).diskCache?.remove(
+                            com.melone.gallery.data.smb.SmbCoilFetcher.cacheKey(orig.smbShare!!, orig.smbPath!!),
+                        )
+                    }
+                }
+            }
+        }
         AlertDialog(
             onDismissRequest = { editedFound = null },
             title = { Text("Bearbeitete Datei gefunden") },
             text = {
                 Text(
-                    "„$editedName\" auf den Server zurückschieben? " +
-                        "Sie wird als neue Datei neben dem Original abgelegt, das Original bleibt unverändert.",
+                    "„${orig.displayName}\" wurde bearbeitet. Auf den Server zurückschieben?\n\n" +
+                        "Ersetzen: das Original auf dem Server wird überschrieben.\n" +
+                        "Als Kopie: wird als „…_bearbeitet\" daneben abgelegt, Original bleibt.",
                 )
             },
-            confirmButton = {
-                TextButton(onClick = {
-                    editedFound = null
-                    scope.launch {
-                        transferring = true
-                        val ok = withContext(Dispatchers.IO) { uploadEditedToServer(context, orig, editedUri) }
-                        transferring = false
-                        toast(if (ok) "Auf dem Server gespeichert" else "Speichern auf dem Server fehlgeschlagen")
-                    }
-                }) { Text("Auf Server") }
+            confirmButton = { TextButton(onClick = { upload(false) }) { Text("Als Kopie") } },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { editedFound = null }) { Text("Abbrechen") }
+                    TextButton(onClick = { upload(true) }) { Text("Ersetzen") }
+                }
             },
-            dismissButton = { TextButton(onClick = { editedFound = null }) { Text("Nur auf dem Gerät") } },
         )
     }
 
@@ -764,30 +785,29 @@ private fun findEditedImage(context: android.content.Context, watch: EditWatch):
             }
         }
     }
-    // Kein neuer Eintrag → wurde unsere Kopie überschrieben?
-    val own = android.content.ContentUris
-        .withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, watch.savedId)
-    resolver.query(own, arrayOf(MediaStore.Images.Media.DATE_MODIFIED), null, null, null)?.use { c ->
-        if (c.moveToFirst() && c.getLong(0) > watch.startSec + 3) return@runCatching own
-    }
-
-    // Letzter Versuch: über den Dateinamen suchen (falls der Editor das Datum des
-    // Originals übernimmt, z. B. "foto(1).jpg" oder "foto_edited.jpg").
+    // Häufigster Fall (Samsung): der Editor überschreibt unsere Kopie — gleicher Name,
+    // gleicher Ordner. Also nach dem Namen suchen und prüfen, ob die Datei NACH dem
+    // Start der Bearbeitung geändert wurde (oder als neuer Eintrag angelegt wurde).
     val dot = watch.item.displayName.lastIndexOf('.')
     val base = if (dot > 0) watch.item.displayName.substring(0, dot) else watch.item.displayName
     resolver.query(
         MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-        arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DISPLAY_NAME),
+        arrayOf(
+            MediaStore.Images.Media._ID,
+            MediaStore.Images.Media.DATE_MODIFIED,
+        ),
         "${MediaStore.Images.Media.DISPLAY_NAME} LIKE ?",
         arrayOf("$base%"),
         "${MediaStore.Images.Media.DATE_MODIFIED} DESC",
     )?.use { c ->
         val idCol = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-        val nameCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+        val modCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_MODIFIED)
         while (c.moveToNext()) {
             val id = c.getLong(idCol)
-            // Nicht unsere unveränderte Kopie und nicht exakt derselbe Name.
-            if (id != watch.savedId && c.getString(nameCol) != watch.item.displayName) {
+            val modified = c.getLong(modCol)
+            // Anderer Eintrag als unsere Kopie ODER unsere Kopie, aber nachträglich
+            // geändert (= vom Editor überschrieben).
+            if (id != watch.savedId || modified > watch.startSec + 5) {
                 return@runCatching android.content.ContentUris
                     .withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
             }
@@ -802,14 +822,26 @@ private fun displayNameOf(context: android.content.Context, uri: Uri): String? =
         ?.use { if (it.moveToFirst()) it.getString(0) else null }
 }.getOrNull()
 
-/** Schreibt die bearbeitete Datei als „<name>_bearbeitet.<ext>" neben das Server-Original. */
-private fun uploadEditedToServer(context: android.content.Context, orig: MediaItem, edited: Uri): Boolean = runCatching {
+/**
+ * Schreibt die bearbeitete Datei auf den Server: entweder über das Original
+ * ([overwrite] = true) oder als „<name>_bearbeitet.<ext>" daneben.
+ */
+private fun uploadEditedToServer(
+    context: android.content.Context,
+    orig: MediaItem,
+    edited: Uri,
+    overwrite: Boolean,
+): Boolean = runCatching {
     val app = context.applicationContext as GalleryApplication
-    val dot = orig.displayName.lastIndexOf('.')
-    val base = if (dot > 0) orig.displayName.substring(0, dot) else orig.displayName
-    val ext = if (dot > 0) orig.displayName.substring(dot) else ".jpg"
-    val dir = (orig.smbPath ?: "").substringBeforeLast('/', "")
-    val target = (if (dir.isEmpty()) "" else "$dir/") + base + "_bearbeitet" + ext
+    val target = if (overwrite) {
+        orig.smbPath!!
+    } else {
+        val dot = orig.displayName.lastIndexOf('.')
+        val base = if (dot > 0) orig.displayName.substring(0, dot) else orig.displayName
+        val ext = if (dot > 0) orig.displayName.substring(dot) else ".jpg"
+        val dir = (orig.smbPath ?: "").substringBeforeLast('/', "")
+        (if (dir.isEmpty()) "" else "$dir/") + base + "_bearbeitet" + ext
+    }
     context.contentResolver.openInputStream(edited)?.use { input ->
         app.container.smbManager.writeFile(orig.smbShare!!, target, input)
     } ?: error("Konnte die bearbeitete Datei nicht lesen")
