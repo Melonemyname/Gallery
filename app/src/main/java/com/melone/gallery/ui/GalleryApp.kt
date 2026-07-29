@@ -119,6 +119,86 @@ fun GalleryApp() {
         galleryVm.refreshServerOnResume()
     }
 
+    // Externe Bearbeitung eines Server-Bildes: Ergebnis suchen und Zurückschieben anbieten.
+    // Bewusst hier (App-Ebene) und über einen dauerhaften Vermerk, weil Android die App
+    // beenden kann, während der Editor läuft.
+    var editedFound by remember {
+        mutableStateOf<Pair<com.melone.gallery.ui.edit.EditWatchStore.Entry, android.net.Uri>?>(null)
+    }
+    var editUploading by remember { mutableStateOf(false) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        val entry = com.melone.gallery.ui.edit.EditWatchStore.load(context)
+        if (entry != null && editedFound == null) {
+            scope.launch {
+                // Die Medienbibliothek kennt die neue Datei oft erst Sekunden später.
+                repeat(12) {
+                    val found = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        com.melone.gallery.ui.edit.findEditedImage(context, entry)
+                    }
+                    if (found != null) {
+                        com.melone.gallery.ui.edit.EditWatchStore.clear(context)
+                        editedFound = entry to found
+                        return@launch
+                    }
+                    delay(800)
+                }
+            }
+        }
+    }
+
+    editedFound?.let { (entry, editedUri) ->
+        fun upload(overwrite: Boolean) {
+            editedFound = null
+            scope.launch {
+                editUploading = true
+                val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    com.melone.gallery.ui.edit.uploadEditedToServer(context, entry, editedUri, overwrite)
+                }
+                editUploading = false
+                Toast.makeText(
+                    context,
+                    when {
+                        !ok -> "Speichern auf dem Server fehlgeschlagen"
+                        overwrite -> "Original auf dem Server ersetzt"
+                        else -> "Als Kopie auf dem Server gespeichert"
+                    },
+                    Toast.LENGTH_SHORT,
+                ).show()
+                if (ok) {
+                    runCatching {
+                        coil.Coil.imageLoader(context).diskCache?.remove(
+                            com.melone.gallery.data.smb.SmbCoilFetcher.cacheKey(entry.share, entry.path),
+                        )
+                    }
+                    galleryVm.refresh()
+                }
+            }
+        }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { editedFound = null },
+            title = { Text("Bearbeitete Datei gefunden") },
+            text = {
+                Text(
+                    "„${entry.displayName}\" wurde bearbeitet. Auf den Server zurückschieben?\n\n" +
+                        "Ersetzen: überschreibt das Original auf dem Server.\n" +
+                        "Als Kopie: legt es als „…_bearbeitet\" daneben, Original bleibt.",
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { upload(false) }) { Text("Als Kopie") }
+            },
+            dismissButton = {
+                androidx.compose.foundation.layout.Row {
+                    androidx.compose.material3.TextButton(onClick = {
+                        com.melone.gallery.ui.edit.EditWatchStore.clear(context)
+                        editedFound = null
+                    }) { Text("Abbrechen") }
+                    androidx.compose.material3.TextButton(onClick = { upload(true) }) { Text("Ersetzen") }
+                }
+            },
+        )
+    }
+
     // Start-Tab aus den Einstellungen einmalig ansteuern.
     val galleryState by galleryVm.state.collectAsStateWithLifecycle()
     var initialNavDone by rememberSaveable { mutableStateOf(false) }
