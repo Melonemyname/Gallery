@@ -127,7 +127,7 @@ fun ViewerScreen(
     LaunchedEffect(pagerState.currentPage) {
         val loader = coil.Coil.imageLoader(context)
         val cur = pagerState.currentPage
-        listOf(cur + 1, cur - 1, cur + 2, cur - 2).forEach { idx ->
+        listOf(cur + 1, cur - 1, cur + 2, cur - 2, cur + 3, cur - 3, cur + 4, cur - 4).forEach { idx ->
             items.getOrNull(idx)?.let { neighbor ->
                 if (!neighbor.isVideo) {
                     loader.enqueue(
