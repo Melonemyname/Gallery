@@ -26,7 +26,7 @@ class SmbCoilFetcher(
 
     override suspend fun fetch(): FetchResult = withContext(Dispatchers.IO) {
         val diskCache = imageLoader.diskCache
-        val cacheKey = "smb|${model.share}|${model.path}"
+        val cacheKey = cacheKey(model.share, model.path)
 
         // 1) Aus Disk-Cache bedienen, falls vorhanden.
         diskCache?.openSnapshot(cacheKey)?.let { snapshot ->
@@ -97,5 +97,14 @@ class SmbCoilFetcher(
     class Factory(private val smb: SmbManager) : Fetcher.Factory<SmbImageModel> {
         override fun create(data: SmbImageModel, options: Options, imageLoader: ImageLoader): Fetcher =
             SmbCoilFetcher(data, options, imageLoader, smb)
+    }
+
+    companion object {
+        /**
+         * Schlüssel im Coil-Disk-Cache. Wird auch als `diskCacheKey` an den
+         * ImageRequest gehängt, damit die Zoom-Bibliothek (telephoto) die Datei im
+         * Cache findet — sonst wirft sie "image that is missing from its disk cache".
+         */
+        fun cacheKey(share: String, path: String): String = "smb|$share|$path"
     }
 }

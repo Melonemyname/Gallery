@@ -123,15 +123,21 @@ fun ViewerScreen(
     )
     val currentItem = items[pagerState.currentPage.coerceIn(0, items.lastIndex)]
 
-    // Nachbarbilder (±2) vorausladen, damit Weiterswipen ohne Wartezeit ist.
+    // Nachbarbilder vorausladen, damit Weiterswipen ohne Wartezeit ist.
+    // WICHTIG: nur in den Festplatten-Cache (Bytes schon da), NICHT in den
+    // Arbeitsspeicher — sonst häufen sich dekodierte Vollbilder an und die App
+    // läuft bei großen Fotos in einen OutOfMemory-Absturz.
     LaunchedEffect(pagerState.currentPage) {
         val loader = coil.Coil.imageLoader(context)
         val cur = pagerState.currentPage
-        listOf(cur + 1, cur - 1, cur + 2, cur - 2, cur + 3, cur - 3, cur + 4, cur - 4).forEach { idx ->
+        listOf(cur + 1, cur - 1, cur + 2, cur - 2).forEach { idx ->
             items.getOrNull(idx)?.let { neighbor ->
                 if (!neighbor.isVideo) {
                     loader.enqueue(
-                        coil.request.ImageRequest.Builder(context).data(neighbor.coilModel).build(),
+                        coil.request.ImageRequest.Builder(context)
+                            .data(neighbor.coilModel)
+                            .memoryCachePolicy(coil.request.CachePolicy.DISABLED)
+                            .build(),
                     )
                 }
             }
@@ -331,7 +337,19 @@ fun ViewerScreen(
                             modifier = Modifier.fillMaxSize(),
                         )
                         ZoomableAsyncImage(
-                            model = item.coilModel,
+                            model = coil.request.ImageRequest.Builder(context)
+                                .data(item.coilModel)
+                                .apply {
+                                    // Ohne passenden diskCacheKey findet telephoto die
+                                    // Datei im Cache nicht und stürzt ab.
+                                    if (item.source == MediaSource.SERVER && item.smbShare != null && item.smbPath != null) {
+                                        diskCacheKey(
+                                            com.melone.gallery.data.smb.SmbCoilFetcher
+                                                .cacheKey(item.smbShare, item.smbPath),
+                                        )
+                                    }
+                                }
+                                .build(),
                             contentDescription = item.displayName,
                             modifier = Modifier.fillMaxSize(),
                             onClick = { chromeVisible = !chromeVisible },
