@@ -51,6 +51,15 @@ import com.melone.gallery.ui.components.landscape16by9
 import kotlinx.coroutines.delay
 
 /**
+ * Ton-Zustand für die laufende App-Sitzung: Schaltet man den Ton bei einem Video
+ * ein, bleibt er auch bei den nächsten Videos an. Beim frischen App-Start wird er
+ * wieder auf stumm gesetzt (siehe MainActivity), Drehen zählt nicht als Neustart.
+ */
+object VideoAudioState {
+    var muted: Boolean = true
+}
+
+/**
  * Video-Seite im Viewer mit eigener Compose-Steuerung (kein Media3-Controller):
  * Play/Pause zentriert neben der Zeitleiste, Zeiten darunter (current links, gesamt
  * rechts), Mute rechts über der Leiste (Ton standardmäßig aus). Beim Scrubben wird
@@ -109,7 +118,7 @@ fun VideoPage(
                     setMediaSource(factory.createMediaSource(androidx.media3.common.MediaItem.fromUri(uri)))
                 }
             }
-            volume = 0f // Ton standardmäßig aus
+            volume = if (VideoAudioState.muted) 0f else 1f // Ton-Zustand der Sitzung
             prepare()
             playWhenReady = true
         }
@@ -134,7 +143,7 @@ fun VideoPage(
     var position by remember(item.id) { mutableStateOf(0L) }
     var duration by remember(item.id) { mutableStateOf(0L) }
     var playing by remember(item.id) { mutableStateOf(true) }
-    var muted by remember(item.id) { mutableStateOf(true) }
+    var muted by remember(item.id) { mutableStateOf(VideoAudioState.muted) }
     LaunchedEffect(player) {
         while (true) {
             position = player.currentPosition
@@ -179,6 +188,7 @@ fun VideoPage(
                 onToggleMute = {
                     muted = !muted
                     player.volume = if (muted) 0f else 1f
+                    VideoAudioState.muted = muted // für die restliche Sitzung merken
                 },
             )
         }
