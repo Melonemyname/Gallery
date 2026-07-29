@@ -43,6 +43,8 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Share
@@ -68,6 +70,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -157,6 +160,9 @@ fun ViewerScreen(
     var pendingDelete by remember { mutableStateOf<MediaItem?>(null) }
     // Leiste/Steuerung (oben + unten) per Berührung ein-/ausblenden.
     var chromeVisible by remember { mutableStateOf(true) }
+    // Vollbild: hebt im Querformat die 16:9-Begrenzung des Mediums auf.
+    // Das Seitenverhältnis bleibt in beiden Fällen erhalten (nie verzerrt).
+    var expanded by rememberSaveable { mutableStateOf(false) }
 
     // System-Leisten-Größen einmalig merken (immersive setzt die Insets später auf 0),
     // inkl. links/rechts fürs Querformat (Navigationsleiste/Kamera-Ausschnitt an der Seite),
@@ -359,10 +365,14 @@ fun ViewerScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+        Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
             HorizontalPager(
                 state = pagerState,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    // Im Querformat auf 16:9 begrenzen (wie die Bedienelemente), außer
+                    // der Nutzer schaltet auf Vollbild. Erst begrenzen, dann füllen.
+                    .then(if (expanded) Modifier else Modifier.landscape16by9())
+                    .fillMaxSize(),
                 // Nachbarseiten schon mitkomponieren → deren Bild lädt vorab.
                 beyondViewportPageCount = 1,
             ) { page ->
@@ -432,6 +442,17 @@ fun ViewerScreen(
                     actions = {
                         if (transferring) {
                             CircularProgressIndicator(Modifier.width(22.dp).height(22.dp), color = Color.White, strokeWidth = 2.dp)
+                        }
+                        // Vollbild nur im Querformat sinnvoll (im Hochformat gibt es
+                        // keine 16:9-Begrenzung).
+                        if (com.melone.gallery.ui.components.isLandscape()) {
+                            IconButton(onClick = { expanded = !expanded }) {
+                                Icon(
+                                    imageVector = if (expanded) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
+                                    contentDescription = if (expanded) "16:9" else "Vollbild",
+                                    tint = Color.White,
+                                )
+                            }
                         }
                         Box {
                             IconButton(onClick = { menuOpen = true }) {

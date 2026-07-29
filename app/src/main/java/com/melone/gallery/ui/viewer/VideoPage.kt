@@ -182,6 +182,8 @@ fun VideoPage(
                 PlayerView(ctx).apply {
                     this.player = player
                     useController = false
+                    // Seitenverhältnis beibehalten (nie strecken), notfalls mit Balken.
+                    resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
                     setOnClickListener { onToggleChrome() }
                     playerView = this
                 }
