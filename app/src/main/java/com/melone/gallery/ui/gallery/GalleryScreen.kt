@@ -510,6 +510,9 @@ private fun GalleryTopBar(
 
     TopAppBar(
         scrollBehavior = scrollBehavior,
+        // Der Statusleisten-Abstand kommt schon über das Scaffold-contentPadding;
+        // ohne das hier wäre er doppelt (sehr großer Rand über "Galerie").
+        windowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
         title = { Text("Galerie") },
         actions = {
             if (loading) {

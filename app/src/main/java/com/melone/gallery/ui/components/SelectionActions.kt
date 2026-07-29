@@ -102,6 +102,8 @@ fun SelectableThumb(
 @Composable
 fun SelectionTopBar(count: Int, onClose: () -> Unit) {
     TopAppBar(
+        // Statusleisten-Abstand kommt über das Scaffold-contentPadding (sonst doppelt).
+        windowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
         title = { Text("$count ausgewählt") },
         navigationIcon = {
             IconButton(onClick = onClose) {

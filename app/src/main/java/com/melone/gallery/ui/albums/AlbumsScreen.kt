@@ -48,6 +48,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -113,7 +114,18 @@ fun AlbumsScreen(
         )
     }
 
-    Column(modifier = Modifier.fillMaxSize().padding(contentPadding)) {
+    // Kopfzeile blendet sich beim Scrollen aus und wieder ein (wie bei Bildern).
+    val scrollBehavior = androidx.compose.material3.TopAppBarDefaults.enterAlwaysScrollBehavior()
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(contentPadding)
+            .then(
+                if (selected.isEmpty()) Modifier.nestedScroll(scrollBehavior.nestedScrollConnection)
+                else Modifier,
+            ),
+    ) {
         when {
             nav.startsWith("L:") -> {
                 val album = localAlbums.find { it.id == nav.removePrefix("L:") }
@@ -123,6 +135,7 @@ fun AlbumsScreen(
                 } else {
                     LocalAlbumLevel(
                         album = album,
+                        scrollBehavior = scrollBehavior,
                         viewMode = albumViewMode,
                         columns = state.prefs.gridColumns,
                         onSetViewMode = viewModel::setAlbumViewMode,
@@ -143,6 +156,7 @@ fun AlbumsScreen(
                 ServerFolderLevel(
                     path = path,
                     serverItems = serverItems,
+                    scrollBehavior = scrollBehavior,
                     viewMode = albumViewMode,
                     columns = state.prefs.gridColumns,
                     onSetViewMode = viewModel::setAlbumViewMode,
@@ -164,6 +178,7 @@ fun AlbumsScreen(
                 localAlbums = localAlbums,
                 serverFolders = GalleryGrouping.serverFolder(serverItems, "").folders,
                 loading = state.isLoading,
+                scrollBehavior = scrollBehavior,
                 onOpenLocal = { onNavChange("L:${it.id}") },
                 onOpenServer = { onNavChange("S:${it.path}") },
                 onRefresh = viewModel::refresh,
@@ -179,12 +194,16 @@ private fun RootLevel(
     localAlbums: List<Album>,
     serverFolders: List<com.melone.gallery.domain.FolderEntry>,
     loading: Boolean,
+    scrollBehavior: androidx.compose.material3.TopAppBarScrollBehavior,
     onOpenLocal: (Album) -> Unit,
     onOpenServer: (com.melone.gallery.domain.FolderEntry) -> Unit,
     onRefresh: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     TopAppBar(
+        scrollBehavior = scrollBehavior,
+        // Statusleisten-Abstand kommt schon über das Scaffold-contentPadding.
+        windowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
         title = { Text("Alben") },
         actions = {
             if (loading) {
@@ -243,6 +262,7 @@ private fun RootLevel(
 private fun ServerFolderLevel(
     path: String,
     serverItems: List<MediaItem>,
+    scrollBehavior: androidx.compose.material3.TopAppBarScrollBehavior,
     viewMode: ViewMode,
     columns: Int,
     onSetViewMode: (ViewMode) -> Unit,
@@ -267,6 +287,8 @@ private fun ServerFolderLevel(
         SelectionTopBar(count = selected.size, onClose = onClearSel)
     } else {
         TopAppBar(
+            scrollBehavior = scrollBehavior,
+            windowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
             title = { Text(path.substringAfterLast('/'), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             navigationIcon = {
                 IconButton(onClick = onBack) {
@@ -349,6 +371,7 @@ private fun ServerFolderLevel(
 @Composable
 private fun LocalAlbumLevel(
     album: Album,
+    scrollBehavior: androidx.compose.material3.TopAppBarScrollBehavior,
     viewMode: ViewMode,
     columns: Int,
     onSetViewMode: (ViewMode) -> Unit,
@@ -370,6 +393,8 @@ private fun LocalAlbumLevel(
         SelectionTopBar(count = selected.size, onClose = onClearSel)
     } else {
         TopAppBar(
+            scrollBehavior = scrollBehavior,
+            windowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
             title = { Text(album.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             navigationIcon = {
                 IconButton(onClick = onBack) {
