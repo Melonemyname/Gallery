@@ -292,30 +292,6 @@ fun ViewerScreen(
     // mit ihren KI-Funktionen). Server-Bilder werden dafür kurz lokal zwischengespeichert
     // und das Ergebnis danach als NEUE Datei zurück in den Server-Ordner geschrieben
     // (Original bleibt unangetastet).
-    // Läuft gerade eine externe Bearbeitung eines Server-Bildes? Dann beim Zurückkommen
-    // die neu entstandene Datei suchen und das Zurückschieben anbieten.
-    var editWatch by remember { mutableStateOf<EditWatch?>(null) }
-    var editedFound by remember { mutableStateOf<Pair<MediaItem, Uri>?>(null) }
-
-    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
-        val watch = editWatch
-        if (watch != null) {
-            scope.launch {
-                // Die Medienbibliothek kennt die neue Datei oft erst ein paar Sekunden
-                // später, daher mehrfach nachsehen statt nur einmal.
-                repeat(10) {
-                    val found = withContext(Dispatchers.IO) { findEditedImage(context, watch) }
-                    if (found != null) {
-                        editWatch = null
-                        editedFound = watch.item to found
-                        return@launch
-                    }
-                    delay(800)
-                }
-            }
-        }
-    }
-
     fun editCurrent() {
         val item = currentItem
         when (item.source) {
@@ -331,22 +307,32 @@ fun ViewerScreen(
                 // öffnen — dann verhält es sich wie jedes lokale Bild (voller Editor).
                 scope.launch {
                     transferring = true
-                    val saved = withContext(Dispatchers.IO) { saveServerImageToGallery(context, item) }
+                    val saved = withContext(Dispatchers.IO) {
+                        com.melone.gallery.ui.edit.saveServerImageToGallery(
+                            context, item.smbShare!!, item.smbPath!!, item.displayName, item.mimeType,
+                        )
+                    }
                     transferring = false
                     if (saved == null) {
                         toast("Konnte das Bild nicht auf dem Gerät speichern")
                         return@launch
                     }
                     toast("Auf dem Gerät gespeichert (Bilder/Galerie)")
-                    // Ab jetzt beobachten, ob der Editor eine neue Datei anlegt.
-                    editWatch = EditWatch(
-                        item = item,
-                        savedId = android.content.ContentUris.parseId(saved),
-                        startSec = System.currentTimeMillis() / 1000 - 2,
+                    // Dauerhaft vermerken: Android kann die App beenden, während der
+                    // Editor läuft. Die Auswertung passiert in GalleryApp beim Zurückkommen.
+                    com.melone.gallery.ui.edit.EditWatchStore.save(
+                        context,
+                        com.melone.gallery.ui.edit.EditWatchStore.Entry(
+                            share = item.smbShare!!,
+                            path = item.smbPath!!,
+                            displayName = item.displayName,
+                            savedId = android.content.ContentUris.parseId(saved),
+                            startSec = System.currentTimeMillis() / 1000 - 2,
+                        ),
                     )
                     if (!openForEditing(context, saved, item.mimeType)) {
                         toast("Keine App zum Bearbeiten oder Öffnen gefunden")
-                        editWatch = null
+                        com.melone.gallery.ui.edit.EditWatchStore.clear(context)
                     }
                 }
             }
@@ -549,53 +535,6 @@ fun ViewerScreen(
         )
     }
 
-    editedFound?.let { (orig, editedUri) ->
-        fun upload(overwrite: Boolean) {
-            editedFound = null
-            scope.launch {
-                transferring = true
-                val ok = withContext(Dispatchers.IO) {
-                    uploadEditedToServer(context, orig, editedUri, overwrite)
-                }
-                transferring = false
-                toast(
-                    when {
-                        !ok -> "Speichern auf dem Server fehlgeschlagen"
-                        overwrite -> "Original auf dem Server ersetzt"
-                        else -> "Als Kopie auf dem Server gespeichert"
-                    },
-                )
-                if (ok && overwrite) {
-                    // Zwischenspeicher für dieses Bild verwerfen, sonst zeigt die App
-                    // weiter die alte Fassung.
-                    runCatching {
-                        coil.Coil.imageLoader(context).diskCache?.remove(
-                            com.melone.gallery.data.smb.SmbCoilFetcher.cacheKey(orig.smbShare!!, orig.smbPath!!),
-                        )
-                    }
-                }
-            }
-        }
-        AlertDialog(
-            onDismissRequest = { editedFound = null },
-            title = { Text("Bearbeitete Datei gefunden") },
-            text = {
-                Text(
-                    "„${orig.displayName}\" wurde bearbeitet. Auf den Server zurückschieben?\n\n" +
-                        "Ersetzen: das Original auf dem Server wird überschrieben.\n" +
-                        "Als Kopie: wird als „…_bearbeitet\" daneben abgelegt, Original bleibt.",
-                )
-            },
-            confirmButton = { TextButton(onClick = { upload(false) }) { Text("Als Kopie") } },
-            dismissButton = {
-                Row {
-                    TextButton(onClick = { editedFound = null }) { Text("Abbrechen") }
-                    TextButton(onClick = { upload(true) }) { Text("Ersetzen") }
-                }
-            },
-        )
-    }
-
     if (showDeleteConfirm) {
         val item = currentItem
         AlertDialog(
@@ -715,138 +654,6 @@ private fun openForEditing(
     }
     return runCatching { context.startActivity(view) }.isSuccess
 }
-
-/** Merkt sich eine laufende externe Bearbeitung eines Server-Bildes. */
-private data class EditWatch(
-    val item: MediaItem,
-    /** Die von uns aufs Gerät gelegte Kopie (die ist NICHT das Ergebnis). */
-    val savedId: Long,
-    val startSec: Long,
-)
-
-/**
- * Speichert ein Server-Bild als echtes Foto auf dem Gerät (Bilder/Galerie). Nur so
- * bietet der Samsung-Editor seine Werkzeuge an; Dateien aus dem App-Zwischenspeicher
- * öffnet er nur in einer eingeschränkten Ansicht.
- */
-private fun saveServerImageToGallery(context: android.content.Context, item: MediaItem): Uri? = runCatching {
-    val app = context.applicationContext as GalleryApplication
-    val resolver = context.contentResolver
-    val values = android.content.ContentValues().apply {
-        put(MediaStore.Images.Media.DISPLAY_NAME, item.displayName)
-        put(MediaStore.Images.Media.MIME_TYPE, item.mimeType)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Galerie")
-            put(MediaStore.Images.Media.IS_PENDING, 1)
-        }
-    }
-    val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-        ?: error("Konnte keinen Eintrag in der Medienbibliothek anlegen")
-    val f = app.container.smbManager.openFile(item.smbShare!!, item.smbPath!!)
-    try {
-        resolver.openOutputStream(uri)?.use { out -> f.inputStream.use { it.copyTo(out) } }
-            ?: error("Kein Schreibzugriff")
-    } finally {
-        runCatching { f.close() }
-    }
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        val done = android.content.ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }
-        resolver.update(uri, done, null, null)
-    }
-    uri
-}.getOrNull()
-
-/**
- * Sucht die vom Editor erzeugte Datei: das neueste Bild, das seit Beginn der
- * Bearbeitung dazugekommen ist (Samsung legt es je nach Einstellung in einen
- * Bearbeitet-Ordner oder neben das Original). Hat der Editor stattdessen unsere
- * Kopie überschrieben, wird diese erkannt.
- */
-private fun findEditedImage(context: android.content.Context, watch: EditWatch): Uri? = runCatching {
-    val resolver = context.contentResolver
-    val cols = arrayOf(
-        MediaStore.Images.Media._ID,
-        MediaStore.Images.Media.DATE_ADDED,
-        MediaStore.Images.Media.DATE_MODIFIED,
-    )
-    resolver.query(
-        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-        cols,
-        "${MediaStore.Images.Media.DATE_ADDED} >= ?",
-        arrayOf(watch.startSec.toString()),
-        "${MediaStore.Images.Media.DATE_ADDED} DESC",
-    )?.use { c ->
-        val idCol = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-        while (c.moveToNext()) {
-            val id = c.getLong(idCol)
-            if (id != watch.savedId) {
-                return@runCatching android.content.ContentUris
-                    .withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
-            }
-        }
-    }
-    // Häufigster Fall (Samsung): der Editor überschreibt unsere Kopie — gleicher Name,
-    // gleicher Ordner. Also nach dem Namen suchen und prüfen, ob die Datei NACH dem
-    // Start der Bearbeitung geändert wurde (oder als neuer Eintrag angelegt wurde).
-    val dot = watch.item.displayName.lastIndexOf('.')
-    val base = if (dot > 0) watch.item.displayName.substring(0, dot) else watch.item.displayName
-    resolver.query(
-        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-        arrayOf(
-            MediaStore.Images.Media._ID,
-            MediaStore.Images.Media.DATE_MODIFIED,
-        ),
-        "${MediaStore.Images.Media.DISPLAY_NAME} LIKE ?",
-        arrayOf("$base%"),
-        "${MediaStore.Images.Media.DATE_MODIFIED} DESC",
-    )?.use { c ->
-        val idCol = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-        val modCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_MODIFIED)
-        while (c.moveToNext()) {
-            val id = c.getLong(idCol)
-            val modified = c.getLong(modCol)
-            // Anderer Eintrag als unsere Kopie ODER unsere Kopie, aber nachträglich
-            // geändert (= vom Editor überschrieben).
-            if (id != watch.savedId || modified > watch.startSec + 5) {
-                return@runCatching android.content.ContentUris
-                    .withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
-            }
-        }
-    }
-    null
-}.getOrNull()
-
-/** Name einer Medien-URI (für die Rückfrage). */
-private fun displayNameOf(context: android.content.Context, uri: Uri): String? = runCatching {
-    context.contentResolver.query(uri, arrayOf(MediaStore.Images.Media.DISPLAY_NAME), null, null, null)
-        ?.use { if (it.moveToFirst()) it.getString(0) else null }
-}.getOrNull()
-
-/**
- * Schreibt die bearbeitete Datei auf den Server: entweder über das Original
- * ([overwrite] = true) oder als „<name>_bearbeitet.<ext>" daneben.
- */
-private fun uploadEditedToServer(
-    context: android.content.Context,
-    orig: MediaItem,
-    edited: Uri,
-    overwrite: Boolean,
-): Boolean = runCatching {
-    val app = context.applicationContext as GalleryApplication
-    val target = if (overwrite) {
-        orig.smbPath!!
-    } else {
-        val dot = orig.displayName.lastIndexOf('.')
-        val base = if (dot > 0) orig.displayName.substring(0, dot) else orig.displayName
-        val ext = if (dot > 0) orig.displayName.substring(dot) else ".jpg"
-        val dir = (orig.smbPath ?: "").substringBeforeLast('/', "")
-        (if (dir.isEmpty()) "" else "$dir/") + base + "_bearbeitet" + ext
-    }
-    context.contentResolver.openInputStream(edited)?.use { input ->
-        app.container.smbManager.writeFile(orig.smbShare!!, target, input)
-    } ?: error("Konnte die bearbeitete Datei nicht lesen")
-    true
-}.getOrDefault(false)
 
 /** Lädt eine Server-Datei in den lokalen Cache (für Bearbeiten). */
 private fun cacheServerFile(context: android.content.Context, item: MediaItem): File? = runCatching {
