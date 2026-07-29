@@ -345,18 +345,14 @@ fun ViewerScreen(
                         setDataAndType(uri, item.mimeType)
                         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
                     }
-                    val launched = runCatching {
-                        editLauncher.launch(Intent.createChooser(edit, "Bearbeiten mit…"))
-                    }.isSuccess
+                    val launched = runCatching { editLauncher.launch(edit) }.isSuccess
                     if (!launched) {
                         // Kein Editor registriert (z. B. Samsung) → nur öffnen, dort Stift antippen.
                         val view = Intent(Intent.ACTION_VIEW).apply {
                             setDataAndType(uri, item.mimeType)
                             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                         }
-                        val ok = runCatching {
-                            context.startActivity(Intent.createChooser(view, "Öffnen mit…"))
-                        }.isSuccess
+                        val ok = runCatching { context.startActivity(view) }.isSuccess
                         pendingEdit = null
                         toast(
                             if (ok) "Kein direkter Editor: in der Galerie auf das Stift-Symbol tippen"
@@ -649,18 +645,19 @@ private fun android.content.Context.findActivityOrNull(): Activity? {
  * Liefert false, wenn beides scheitert.
  */
 private fun openForEditing(context: android.content.Context, uri: Uri, mimeType: String): Boolean {
+    // Bewusst OHNE createChooser: nur dann bietet Android im Auswahl-Dialog
+    // "Immer/Nur einmal" an. Ist eine Standard-App gesetzt, öffnet es direkt.
     val edit = Intent(Intent.ACTION_EDIT).apply {
         setDataAndType(uri, mimeType)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
     }
-    if (runCatching { context.startActivity(Intent.createChooser(edit, "Bearbeiten mit…")) }.isSuccess) {
-        return true
-    }
+    if (runCatching { context.startActivity(edit) }.isSuccess) return true
+
     val view = Intent(Intent.ACTION_VIEW).apply {
         setDataAndType(uri, mimeType)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
-    return runCatching { context.startActivity(Intent.createChooser(view, "Öffnen mit…")) }.isSuccess
+    return runCatching { context.startActivity(view) }.isSuccess
 }
 
 /** Lädt eine Server-Datei in den lokalen Cache (für Bearbeiten). */
