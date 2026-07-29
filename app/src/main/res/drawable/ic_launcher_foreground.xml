@@ -1,13 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  App-Icon: weiße Outline (Rahmen, Sonne, Hügel) auf transparentem Grund.
+  Als Vektor, damit es in jeder Größe scharf bleibt. Der Inhalt liegt innerhalb der
+  sicheren Zone (26..82 von 108), damit runde/quadratische Masken nichts abschneiden.
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Einfaches Foto-Symbol (Berge + Sonne) -->
+
+    <!-- Rahmen (abgerundetes Quadrat) -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M34,34 h40 a4,4 0 0 1 4,4 v32 a4,4 0 0 1 -4,4 h-40 a4,4 0 0 1 -4,-4 v-32 a4,4 0 0 1 4,-4 z M34,38 v28 l12,-14 8,9 10,-13 10,18 v-28 z" />
+        android:pathData="M36,26 H72 A10,10 0 0 1 82,36 V72 A10,10 0 0 1 72,82 H36 A10,10 0 0 1 26,72 V36 A10,10 0 0 1 36,26 Z"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.6"
+        android:strokeLineJoin="round"
+        android:strokeLineCap="round" />
+
+    <!-- Sonne -->
     <path
-        android:fillColor="#FFD54F"
-        android:pathData="M64,46 m-5,0 a5,5 0 1 0 10,0 a5,5 0 1 0 -10,0" />
+        android:pathData="M32.7,39 A6.8,6.8 0 1 1 46.3,39 A6.8,6.8 0 1 1 32.7,39 Z"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.2"
+        android:strokeLineJoin="round"
+        android:strokeLineCap="round" />
+
+    <!-- Linker Hügel -->
+    <path
+        android:pathData="M26,57 C34,58 42,68 47.5,82"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.6"
+        android:strokeLineJoin="round"
+        android:strokeLineCap="round" />
+
+    <!-- Rechter Hügel -->
+    <path
+        android:pathData="M47.5,82 C55,64 66,50 82,45.5"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.6"
+        android:strokeLineJoin="round"
+        android:strokeLineCap="round" />
 </vector>
