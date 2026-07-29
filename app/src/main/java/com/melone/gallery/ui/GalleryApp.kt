@@ -153,7 +153,11 @@ fun GalleryApp() {
     // weil die bearbeitete Datei vom Editor stammt und nicht uns gehört).
     val cleanupLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult(),
-    ) { }
+    ) {
+        // Nach dem Löschen neu einlesen, damit der angelegte Ordner "Galerie"
+        // bzw. die Kopien sofort aus der Album-/Bilderliste verschwinden.
+        galleryVm.refresh()
+    }
 
     editedFound?.let { (entry, editedUri) ->
         fun upload(overwrite: Boolean) {
