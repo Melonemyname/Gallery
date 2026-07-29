@@ -87,7 +87,7 @@ object GalleryGrouping {
         }
         val folders = childItems.map { (cp, list) ->
             FolderEntry(path = cp, name = cp.substringAfterLast('/'), cover = list.firstOrNull(), count = list.size)
-        }.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+        }.sortedWith { x, y -> naturalCompare(x.name, y.name) }
         return FolderView(folders, direct)
     }
 
@@ -100,10 +100,52 @@ object GalleryGrouping {
     }
 
 
+    /**
+     * Natürliche Sortierung: Ziffernfolgen werden als Zahl verglichen, damit
+     * „Bild2" vor „Bild10" steht (zeichenweise wäre es umgekehrt). Groß-/Kleinschreibung
+     * spielt keine Rolle; bei Gleichstand entscheidet der normale Vergleich, damit die
+     * Reihenfolge stabil bleibt (z. B. „01" vs. „1").
+     */
+    fun naturalCompare(a: String, b: String): Int {
+        var i = 0
+        var j = 0
+        while (i < a.length && j < b.length) {
+            val ca = a[i]
+            val cb = b[j]
+            if (ca.isDigit() && cb.isDigit()) {
+                // Führende Nullen überspringen, dann Ziffernblöcke als Zahl vergleichen.
+                var si = i
+                var sj = j
+                while (si < a.length && a[si] == '0') si++
+                while (sj < b.length && b[sj] == '0') sj++
+                var ei = si
+                var ej = sj
+                while (ei < a.length && a[ei].isDigit()) ei++
+                while (ej < b.length && b[ej].isDigit()) ej++
+                val lenA = ei - si
+                val lenB = ej - sj
+                if (lenA != lenB) return lenA - lenB
+                for (k in 0 until lenA) {
+                    val d = a[si + k] - b[sj + k]
+                    if (d != 0) return d
+                }
+                i = ei
+                j = ej
+            } else {
+                val d = ca.lowercaseChar().compareTo(cb.lowercaseChar())
+                if (d != 0) return d
+                i++
+                j++
+            }
+        }
+        val rest = (a.length - i) - (b.length - j)
+        return if (rest != 0) rest else a.compareTo(b)
+    }
+
     fun sort(items: List<MediaItem>, sort: SortOption): List<MediaItem> {
         val comparator: Comparator<MediaItem> = when (sort.field) {
             SortField.DATE_TAKEN, SortField.DATE_MODIFIED -> compareBy { it.dateTaken }
-            SortField.NAME -> compareBy(String.CASE_INSENSITIVE_ORDER) { it.displayName }
+            SortField.NAME -> Comparator { a, b -> naturalCompare(a.displayName, b.displayName) }
         }
         val sorted = items.sortedWith(comparator)
         return if (sort.direction == SortDirection.DESC) sorted.reversed() else sorted
@@ -151,7 +193,7 @@ object GalleryGrouping {
                 source = src,
                 items = list,
             )
-        }.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+        }.sortedWith { x, y -> naturalCompare(x.name, y.name) }
     }
 
     private fun albumKey(item: MediaItem): String = when (item.source) {
