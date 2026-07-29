@@ -6,6 +6,9 @@ import android.content.ContextWrapper
 import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.ExitTransition
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -146,6 +149,12 @@ fun GalleryApp() {
         }
     }
 
+    // Nach dem Hochladen die Datei(en) wieder vom Gerät entfernen (System-Nachfrage,
+    // weil die bearbeitete Datei vom Editor stammt und nicht uns gehört).
+    val cleanupLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult(),
+    ) { }
+
     editedFound?.let { (entry, editedUri) ->
         fun upload(overwrite: Boolean) {
             editedFound = null
@@ -165,12 +174,36 @@ fun GalleryApp() {
                     Toast.LENGTH_SHORT,
                 ).show()
                 if (ok) {
+                    // Zwischenspeicher verwerfen: Original UND Vorschaubild, sonst bleibt
+                    // die alte Fassung sichtbar.
                     runCatching {
-                        coil.Coil.imageLoader(context).diskCache?.remove(
+                        val loader = coil.Coil.imageLoader(context)
+                        loader.diskCache?.remove(
                             com.melone.gallery.data.smb.SmbCoilFetcher.cacheKey(entry.share, entry.path),
                         )
+                        loader.diskCache?.remove(
+                            com.melone.gallery.data.smb.SmbThumbFetcher.cacheKey(entry.share, entry.path),
+                        )
+                        loader.memoryCache?.clear()
                     }
                     galleryVm.refresh()
+
+                    // Kopien auf dem Gerät aufräumen: die bearbeitete Datei und (falls
+                    // ein eigener Eintrag) die von uns abgelegte Ausgangskopie.
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        val uris = buildList {
+                            add(editedUri)
+                            val own = android.content.ContentUris.withAppendedId(
+                                android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                                entry.savedId,
+                            )
+                            if (own != editedUri) add(own)
+                        }
+                        runCatching {
+                            val pi = android.provider.MediaStore.createDeleteRequest(context.contentResolver, uris)
+                            cleanupLauncher.launch(IntentSenderRequest.Builder(pi.intentSender).build())
+                        }
+                    }
                 }
             }
         }

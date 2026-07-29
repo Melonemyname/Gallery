@@ -31,8 +31,8 @@ class SmbThumbFetcher(
 
     override suspend fun fetch(): FetchResult = withContext<FetchResult>(Dispatchers.IO) {
         val diskCache = imageLoader.diskCache
-        val cacheKey = "smbthumb|${model.share}|${model.path}"
-        val thumbPath = ".thumbs/${model.path}.jpg"
+        val cacheKey = cacheKey(model.share, model.path)
+        val thumbPath = serverThumbPath(model.path)
 
         // 1) Aus Disk-Cache bedienen, falls vorhanden.
         diskCache?.openSnapshot(cacheKey)?.let { snapshot ->
@@ -105,5 +105,13 @@ class SmbThumbFetcher(
     class Factory(private val smb: SmbManager) : Fetcher.Factory<SmbThumbModel> {
         override fun create(data: SmbThumbModel, options: Options, imageLoader: ImageLoader): Fetcher =
             SmbThumbFetcher(data, options, imageLoader, smb)
+    }
+
+    companion object {
+        /** Schlüssel im Coil-Disk-Cache (zum gezielten Verwerfen nach Änderungen). */
+        fun cacheKey(share: String, path: String): String = "smbthumb|$share|$path"
+
+        /** Pfad des server-seitig vorgenerierten Vorschaubilds. */
+        fun serverThumbPath(path: String): String = ".thumbs/$path.jpg"
     }
 }

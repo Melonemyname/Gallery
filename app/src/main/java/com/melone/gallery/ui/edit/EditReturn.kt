@@ -158,5 +158,16 @@ fun uploadEditedToServer(
     context.contentResolver.openInputStream(edited)?.use { input ->
         app.container.smbManager.writeFile(entry.share, target, input)
     } ?: error("Konnte die bearbeitete Datei nicht lesen")
+
+    // Beim Ersetzen ist das server-seitig vorgenerierte Vorschaubild veraltet: löschen,
+    // sonst zeigt die App weiter die alte Fassung. Das Server-Skript legt es neu an.
+    if (overwrite) {
+        runCatching {
+            app.container.smbManager.deleteFile(
+                entry.share,
+                com.melone.gallery.data.smb.SmbThumbFetcher.serverThumbPath(entry.path),
+            )
+        }
+    }
     true
 }.getOrDefault(false)
