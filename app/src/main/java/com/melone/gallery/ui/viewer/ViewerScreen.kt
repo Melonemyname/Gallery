@@ -41,6 +41,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DriveFileMove
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
@@ -287,6 +288,73 @@ fun ViewerScreen(
         }
     }
 
+    // Bearbeiten: übergibt das Bild an einen Editor auf dem Gerät (z. B. Samsung-Galerie
+    // mit ihren KI-Funktionen). Server-Bilder werden dafür kurz lokal zwischengespeichert
+    // und das Ergebnis danach als NEUE Datei zurück in den Server-Ordner geschrieben
+    // (Original bleibt unangetastet).
+    var pendingEdit by remember { mutableStateOf<Pair<MediaItem, File>?>(null) }
+
+    val editLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        val pending = pendingEdit
+        pendingEdit = null
+        if (result.resultCode == android.app.Activity.RESULT_OK && pending != null) {
+            val (item, file) = pending
+            scope.launch {
+                transferring = true
+                val ok = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val dot = item.displayName.lastIndexOf('.')
+                        val base = if (dot > 0) item.displayName.substring(0, dot) else item.displayName
+                        val ext = if (dot > 0) item.displayName.substring(dot) else ".jpg"
+                        val dir = (item.smbPath ?: "").substringBeforeLast('/', "")
+                        val target = (if (dir.isEmpty()) "" else "$dir/") + base + "_bearbeitet" + ext
+                        file.inputStream().use { input ->
+                            app.container.smbManager.writeFile(item.smbShare!!, target, input)
+                        }
+                    }.isSuccess
+                }
+                transferring = false
+                toast(if (ok) "Als neue Datei auf dem Server gespeichert" else "Speichern auf dem Server fehlgeschlagen")
+            }
+        }
+    }
+
+    fun editCurrent() {
+        val item = currentItem
+        when (item.source) {
+            MediaSource.LOCAL -> {
+                // Lokal: der Editor speichert selbst (inkl. Samsungs Frage Kopie/Original).
+                val intent = Intent(Intent.ACTION_EDIT).apply {
+                    setDataAndType(Uri.parse(item.id), item.mimeType)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                }
+                runCatching { context.startActivity(Intent.createChooser(intent, "Bearbeiten mit…")) }
+                    .onFailure { toast("Keine Bearbeitungs-App gefunden") }
+            }
+            MediaSource.SERVER -> {
+                scope.launch {
+                    transferring = true
+                    val file = withContext(Dispatchers.IO) { cacheServerFile(context, item) }
+                    transferring = false
+                    if (file == null) {
+                        toast("Konnte das Bild nicht laden")
+                        return@launch
+                    }
+                    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                    pendingEdit = item to file
+                    val intent = Intent(Intent.ACTION_EDIT).apply {
+                        setDataAndType(uri, item.mimeType)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                    }
+                    runCatching { editLauncher.launch(Intent.createChooser(intent, "Bearbeiten mit…")) }
+                        .onFailure { toast("Keine Bearbeitungs-App gefunden"); pendingEdit = null }
+                }
+            }
+        }
+    }
+
     fun deleteCurrent() {
         val item = currentItem
         when (item.source) {
@@ -401,6 +469,11 @@ fun ViewerScreen(
                                     },
                                 )
                                 if (!currentItem.isVideo) {
+                                    DropdownMenuItem(
+                                        text = { Text("Bearbeiten") },
+                                        leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
+                                        onClick = { menuOpen = false; editCurrent() },
+                                    )
                                     DropdownMenuItem(
                                         text = { Text("Als Hintergrund festlegen") },
                                         leadingIcon = { Icon(Icons.Filled.Wallpaper, contentDescription = null) },
@@ -555,6 +628,20 @@ private fun android.content.Context.findActivityOrNull(): Activity? {
     }
     return null
 }
+
+/** Lädt eine Server-Datei in den lokalen Cache (für Bearbeiten). */
+private fun cacheServerFile(context: android.content.Context, item: MediaItem): File? = runCatching {
+    val app = context.applicationContext as GalleryApplication
+    val dir = File(context.cacheDir, "shared").apply { mkdirs() }
+    val out = File(dir, item.displayName)
+    val f = app.container.smbManager.openFile(item.smbShare!!, item.smbPath!!)
+    try {
+        f.inputStream.use { input -> out.outputStream().use { output -> input.copyTo(output) } }
+    } finally {
+        runCatching { f.close() }
+    }
+    out
+}.getOrNull()
 
 /** Liefert eine teilbare content-URI. Server-Dateien werden vorher in den Cache kopiert. */
 private suspend fun localContentUri(context: android.content.Context, item: MediaItem): Uri? =
