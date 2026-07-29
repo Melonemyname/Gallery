@@ -64,6 +64,8 @@ fun VideoPage(
     chromeVisible: Boolean,
     onToggleChrome: () -> Unit,
     bottomInset: androidx.compose.ui.unit.Dp = 0.dp,
+    leftInset: androidx.compose.ui.unit.Dp = 0.dp,
+    rightInset: androidx.compose.ui.unit.Dp = 0.dp,
 ) {
     if (!isActive) {
         MediaThumbnail(item = item, modifier = Modifier.fillMaxSize())
@@ -164,6 +166,8 @@ fun VideoPage(
                 duration = duration,
                 muted = muted,
                 bottomInset = bottomInset,
+                leftInset = leftInset,
+                rightInset = rightInset,
                 onPlayPause = {
                     if (player.isPlaying) player.pause() else player.play()
                     playing = player.isPlaying
@@ -185,6 +189,8 @@ private fun VideoControls(
     duration: Long,
     muted: Boolean,
     bottomInset: androidx.compose.ui.unit.Dp,
+    leftInset: androidx.compose.ui.unit.Dp,
+    rightInset: androidx.compose.ui.unit.Dp,
     onPlayPause: () -> Unit,
     onSeek: (Long) -> Unit,
     onToggleMute: () -> Unit,
@@ -198,8 +204,9 @@ private fun VideoControls(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            // Über den schwebenden Info/Teilen/Löschen-Buttons und der Navigationsleiste.
-            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = bottomInset + 88.dp),
+            // Über den schwebenden Info/Teilen/Löschen-Buttons und der Navigationsleiste;
+            // im Querformat links/rechts an den Systemleisten/Kamera-Ausschnitt anpassen.
+            .padding(start = 12.dp + leftInset, end = 12.dp + rightInset, top = 8.dp, bottom = bottomInset + 88.dp),
     ) {
         Box(modifier = Modifier.fillMaxWidth()) {
             IconButton(onClick = onToggleMute, modifier = Modifier.align(Alignment.CenterEnd)) {

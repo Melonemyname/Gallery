@@ -74,6 +74,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -147,7 +149,16 @@ fun GalleryScreen(
     // Im Auswahlmodus: Zurück beendet erst die Auswahl (statt die App/den Tab zu verlassen).
     BackHandler(enabled = selectionMode) { clearSel() }
 
-    Column(modifier = Modifier.fillMaxSize().padding(contentPadding)) {
+    // Kopfzeile blendet sich beim Scrollen aus (mehr Platz fürs Raster, v. a. im Querformat)
+    // und wieder ein, sobald man nach oben scrollt.
+    val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(contentPadding)
+            .then(if (selectionMode) Modifier else Modifier.nestedScroll(scrollBehavior.nestedScrollConnection)),
+    ) {
         // Auswahlmodus ersetzt nur die Top-Bar; die Filterzeile bleibt erhalten,
         // damit sich der Inhalt beim langen Halten nicht nach oben schiebt.
         if (selectionMode) {
@@ -159,6 +170,7 @@ fun GalleryScreen(
                 sort = state.prefs.sort,
                 timelineMixed = state.prefs.timelineMixed,
                 loading = state.isLoading,
+                scrollBehavior = scrollBehavior,
                 onViewMode = viewModel::setViewMode,
                 onGrouping = viewModel::setGrouping,
                 onSort = viewModel::setSort,
@@ -485,6 +497,7 @@ private fun GalleryTopBar(
     sort: SortOption,
     timelineMixed: Boolean,
     loading: Boolean,
+    scrollBehavior: androidx.compose.material3.TopAppBarScrollBehavior,
     onViewMode: (ViewMode) -> Unit,
     onGrouping: (Grouping) -> Unit,
     onSort: (SortOption) -> Unit,
@@ -496,6 +509,7 @@ private fun GalleryTopBar(
     var viewMenu by remember { mutableStateOf(false) }
 
     TopAppBar(
+        scrollBehavior = scrollBehavior,
         title = { Text("Galerie") },
         actions = {
             if (loading) {

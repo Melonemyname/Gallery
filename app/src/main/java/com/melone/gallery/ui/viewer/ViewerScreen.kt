@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -149,16 +150,25 @@ fun ViewerScreen(
     // Leiste/Steuerung (oben + unten) per Berührung ein-/ausblenden.
     var chromeVisible by remember { mutableStateOf(true) }
 
-    // System-Leisten-Höhen einmalig merken (immersive setzt die Insets später auf 0),
-    // damit die Leisten nicht in Status-/Navigationsleiste clippen.
+    // System-Leisten-Größen einmalig merken (immersive setzt die Insets später auf 0),
+    // inkl. links/rechts fürs Querformat (Navigationsleiste/Kamera-Ausschnitt an der Seite),
+    // damit die Steuerung nicht unter die Systemleisten läuft.
     val sysBars = WindowInsets.systemBars.asPaddingValues()
+    val cutout = WindowInsets.displayCutout.asPaddingValues()
     val insetTop = remember { mutableStateOf(0.dp) }
     val insetBottom = remember { mutableStateOf(0.dp) }
-    LaunchedEffect(sysBars) {
+    val insetLeft = remember { mutableStateOf(0.dp) }
+    val insetRight = remember { mutableStateOf(0.dp) }
+    LaunchedEffect(sysBars, cutout) {
+        val ld = androidx.compose.ui.unit.LayoutDirection.Ltr
         val t = sysBars.calculateTopPadding()
         val b = sysBars.calculateBottomPadding()
+        val l = maxOf(sysBars.calculateLeftPadding(ld), cutout.calculateLeftPadding(ld))
+        val r = maxOf(sysBars.calculateRightPadding(ld), cutout.calculateRightPadding(ld))
         if (t > insetTop.value) insetTop.value = t
         if (b > insetBottom.value) insetBottom.value = b
+        if (l > insetLeft.value) insetLeft.value = l
+        if (r > insetRight.value) insetRight.value = r
     }
     val details by vm.details.collectAsStateWithLifecycle()
 
@@ -306,6 +316,8 @@ fun ViewerScreen(
                         chromeVisible = chromeVisible,
                         onToggleChrome = { chromeVisible = !chromeVisible },
                         bottomInset = insetBottom.value,
+                        leftInset = insetLeft.value,
+                        rightInset = insetRight.value,
                     )
                 } else {
                     Box(modifier = Modifier.fillMaxSize()) {
@@ -337,7 +349,7 @@ fun ViewerScreen(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
                         .alpha(chromeAlpha)
-                        .padding(top = insetTop.value),
+                        .padding(top = insetTop.value, start = insetLeft.value, end = insetRight.value),
                     windowInsets = WindowInsets(0, 0, 0, 0),
                     title = { Text(currentItem.displayName, color = Color.White, maxLines = 1) },
                     navigationIcon = {
@@ -393,7 +405,7 @@ fun ViewerScreen(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .alpha(chromeAlpha)
-                        .padding(bottom = insetBottom.value + 24.dp),
+                        .padding(bottom = insetBottom.value + 24.dp, start = insetLeft.value, end = insetRight.value),
                     shape = RoundedCornerShape(28.dp),
                     color = Color.Black.copy(alpha = 0.45f),
                 ) {
