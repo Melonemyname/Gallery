@@ -14,6 +14,10 @@ import com.melone.gallery.ui.theme.GalleryTheme
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
+        // Nur beim frischen App-Start (nicht beim Drehen) den Ton wieder stummschalten.
+        if (savedInstanceState == null) {
+            com.melone.gallery.ui.viewer.VideoAudioState.muted = true
+        }
         super.onCreate(savedInstanceState)
         setContent {
             GalleryTheme {
