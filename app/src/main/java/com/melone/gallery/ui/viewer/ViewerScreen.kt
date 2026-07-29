@@ -661,6 +661,15 @@ private fun openForEditing(
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
         }
         if (runCatching { context.startActivity(edit) }.isSuccess) return true
+    } else {
+        // Videos: die Samsung-Galerie nimmt sie nur per Schnellansicht an. "Öffnen"
+        // landet dagegen im separaten Videoplayer, von dem der Weg zum Bearbeiten
+        // umständlicher ist.
+        val quick = Intent(Intent.ACTION_QUICK_VIEW).apply {
+            setDataAndType(uri, mimeType)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        if (runCatching { context.startActivity(quick) }.isSuccess) return true
     }
 
     val view = Intent(Intent.ACTION_VIEW).apply {
