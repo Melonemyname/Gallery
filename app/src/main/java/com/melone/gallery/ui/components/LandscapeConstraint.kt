@@ -24,6 +24,11 @@ fun Modifier.landscape16by9(): Modifier {
     }
 }
 
+/** true, wenn das Gerät gerade im Querformat ist. */
+@Composable
+fun isLandscape(): Boolean =
+    LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
+
 /**
  * Seitlicher Rand, der durch [landscape16by9] frei bleibt (je Seite). Für Elemente,
  * die außerhalb des begrenzten Inhalts positioniert werden (z. B. der Papierkorb-FAB

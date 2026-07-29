@@ -114,15 +114,18 @@ fun AlbumsScreen(
         )
     }
 
-    // Kopfzeile blendet sich beim Scrollen aus und wieder ein (wie bei Bildern).
+    // Kopfzeile blendet sich beim Scrollen aus und wieder ein (wie bei Bildern),
+    // aber nur im Querformat; im Hochformat bleibt sie stehen.
     val scrollBehavior = androidx.compose.material3.TopAppBarDefaults.enterAlwaysScrollBehavior()
+    val landscape = com.melone.gallery.ui.components.isLandscape()
+    LaunchedEffect(landscape) { if (!landscape) scrollBehavior.state.heightOffset = 0f }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(contentPadding)
             .then(
-                if (selected.isEmpty()) Modifier.nestedScroll(scrollBehavior.nestedScrollConnection)
+                if (selected.isEmpty() && landscape) Modifier.nestedScroll(scrollBehavior.nestedScrollConnection)
                 else Modifier,
             ),
     ) {

@@ -216,22 +216,28 @@ private fun MainScaffold(
     onSelectTab: (String) -> Unit = {},
     content: @Composable (androidx.compose.foundation.layout.PaddingValues) -> Unit,
 ) {
-    // Untere Navigation beim Scrollen aus-/einblenden (wie die Kopfzeile).
+    // Untere Navigation beim Scrollen aus-/einblenden (wie die Kopfzeile),
+    // aber nur im Querformat; im Hochformat bleibt sie stehen.
     var barsVisible by remember { mutableStateOf(true) }
-    val hideOnScroll = remember {
+    val landscape = com.melone.gallery.ui.components.isLandscape()
+    val hideOnScroll = remember(landscape) {
         object : androidx.compose.ui.input.nestedscroll.NestedScrollConnection {
             override fun onPreScroll(
                 available: androidx.compose.ui.geometry.Offset,
                 source: androidx.compose.ui.input.nestedscroll.NestedScrollSource,
             ): androidx.compose.ui.geometry.Offset {
-                if (available.y < -3f) barsVisible = false   // runter scrollen → ausblenden
-                if (available.y > 3f) barsVisible = true     // hoch scrollen → einblenden
+                if (landscape) {
+                    if (available.y < -3f) barsVisible = false   // runter scrollen → ausblenden
+                    if (available.y > 3f) barsVisible = true     // hoch scrollen → einblenden
+                }
                 return androidx.compose.ui.geometry.Offset.Zero
             }
         }
     }
-    // Beim Verlassen/Wechsel wieder einblenden, damit die Leiste nie "verloren" wirkt.
-    LaunchedEffect(showBottomBar, currentRoute) { if (!showBottomBar) barsVisible = true }
+    // Beim Verlassen/Wechsel bzw. im Hochformat wieder einblenden.
+    LaunchedEffect(showBottomBar, currentRoute, landscape) {
+        if (!showBottomBar || !landscape) barsVisible = true
+    }
 
     // Statt die Leiste aus dem Layout zu nehmen (dabei springt der FAB), bleibt sie
     // stehen und wird zusammen mit dem FAB um dieselbe Strecke nach unten geschoben.

@@ -80,6 +80,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -149,15 +150,21 @@ fun GalleryScreen(
     // Im Auswahlmodus: Zurück beendet erst die Auswahl (statt die App/den Tab zu verlassen).
     BackHandler(enabled = selectionMode) { clearSel() }
 
-    // Kopfzeile blendet sich beim Scrollen aus (mehr Platz fürs Raster, v. a. im Querformat)
-    // und wieder ein, sobald man nach oben scrollt.
+    // Kopfzeile blendet sich beim Scrollen aus (mehr Platz fürs Raster) und wieder ein.
+    // Nur im Querformat; im Hochformat bleibt sie stehen.
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
+    val landscape = com.melone.gallery.ui.components.isLandscape()
+    // Beim Drehen ins Hochformat eine eingeklappte Leiste wieder ausfahren.
+    LaunchedEffect(landscape) { if (!landscape) scrollBehavior.state.heightOffset = 0f }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(contentPadding)
-            .then(if (selectionMode) Modifier else Modifier.nestedScroll(scrollBehavior.nestedScrollConnection)),
+            .then(
+                if (selectionMode || !landscape) Modifier
+                else Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+            ),
     ) {
         // Auswahlmodus ersetzt nur die Top-Bar; die Filterzeile bleibt erhalten,
         // damit sich der Inhalt beim langen Halten nicht nach oben schiebt.
