@@ -236,6 +236,10 @@ private fun VideoControls(
     val max = duration.coerceAtLeast(1L).toFloat()
     val shown = if (scrubbing) scrubPos else position.coerceIn(0L, duration).toFloat()
 
+    // Im Querformat ist der Bildschirm nur etwa halb so hoch: derselbe Abstand von unten
+    // würde die Steuerung optisch in die Bildmitte schieben.
+    val bottomGap = if (com.melone.gallery.ui.components.isLandscape()) 44.dp else 88.dp
+
     Column(
         modifier = Modifier
             // Im Querformat auf 16:9 begrenzen (wie das Videobild), sonst zieht sich die
@@ -243,7 +247,7 @@ private fun VideoControls(
             // Erst begrenzen, dann füllen — sonst bleibt die Begrenzung wirkungslos.
             .landscape16by9()
             .fillMaxWidth()
-            .padding(start = 12.dp + leftInset, end = 12.dp + rightInset, top = 8.dp, bottom = bottomInset + 88.dp),
+            .padding(start = 12.dp + leftInset, end = 12.dp + rightInset, top = 8.dp, bottom = bottomInset + bottomGap),
     ) {
         Box(modifier = Modifier.fillMaxWidth()) {
             IconButton(onClick = onToggleMute, modifier = Modifier.align(Alignment.CenterEnd)) {

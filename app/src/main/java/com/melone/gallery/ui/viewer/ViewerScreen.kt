@@ -477,7 +477,12 @@ fun ViewerScreen(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .alpha(chromeAlpha)
-                        .padding(bottom = insetBottom.value + 24.dp, start = insetLeft.value, end = insetRight.value),
+                        .padding(
+                            // Im Querformat näher an den unteren Rand (weniger Höhe verfügbar).
+                            bottom = insetBottom.value + if (com.melone.gallery.ui.components.isLandscape()) 6.dp else 24.dp,
+                            start = insetLeft.value,
+                            end = insetRight.value,
+                        ),
                     shape = RoundedCornerShape(28.dp),
                     color = Color.Black.copy(alpha = 0.45f),
                 ) {
