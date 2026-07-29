@@ -326,7 +326,7 @@ fun ViewerScreen(
         when (item.source) {
             MediaSource.LOCAL -> {
                 // Lokal: der Editor speichert selbst (inkl. Samsungs Frage Kopie/Original).
-                if (!openForEditing(context, Uri.parse(item.id), item.mimeType)) {
+                if (!openForEditing(context, Uri.parse(item.id), item.mimeType, skipEditAction = item.isVideo)) {
                     toast("Keine App zum Bearbeiten oder Öffnen gefunden")
                 }
             }
@@ -646,14 +646,22 @@ private fun android.content.Context.findActivityOrNull(): Activity? {
  * Bild stattdessen in der Galerie geöffnet, wo man den Editor per Stift erreicht.
  * Liefert false, wenn beides scheitert.
  */
-private fun openForEditing(context: android.content.Context, uri: Uri, mimeType: String): Boolean {
+private fun openForEditing(
+    context: android.content.Context,
+    uri: Uri,
+    mimeType: String,
+    /** Bei Videos direkt "Öffnen": ACTION_EDIT landet sonst im Video-Editor statt in der Galerie. */
+    skipEditAction: Boolean = false,
+): Boolean {
     // Bewusst OHNE createChooser: nur dann bietet Android im Auswahl-Dialog
     // "Immer/Nur einmal" an. Ist eine Standard-App gesetzt, öffnet es direkt.
-    val edit = Intent(Intent.ACTION_EDIT).apply {
-        setDataAndType(uri, mimeType)
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+    if (!skipEditAction) {
+        val edit = Intent(Intent.ACTION_EDIT).apply {
+            setDataAndType(uri, mimeType)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        }
+        if (runCatching { context.startActivity(edit) }.isSuccess) return true
     }
-    if (runCatching { context.startActivity(edit) }.isSuccess) return true
 
     val view = Intent(Intent.ACTION_VIEW).apply {
         setDataAndType(uri, mimeType)
