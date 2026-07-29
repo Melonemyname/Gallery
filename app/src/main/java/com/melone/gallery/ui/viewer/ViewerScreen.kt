@@ -470,11 +470,6 @@ fun ViewerScreen(
                                 )
                                 if (!currentItem.isVideo) {
                                     DropdownMenuItem(
-                                        text = { Text("Bearbeiten") },
-                                        leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
-                                        onClick = { menuOpen = false; editCurrent() },
-                                    )
-                                    DropdownMenuItem(
                                         text = { Text("Als Hintergrund festlegen") },
                                         leadingIcon = { Icon(Icons.Filled.Wallpaper, contentDescription = null) },
                                         onClick = {
@@ -503,6 +498,11 @@ fun ViewerScreen(
                     color = Color.Black.copy(alpha = 0.45f),
                 ) {
                     Row(modifier = Modifier.padding(horizontal = 6.dp)) {
+                        if (!currentItem.isVideo) {
+                            IconButton(onClick = { editCurrent() }) {
+                                Icon(Icons.Filled.Edit, contentDescription = "Bearbeiten", tint = Color.White)
+                            }
+                        }
                         IconButton(onClick = { showInfo = !showInfo; if (showInfo) chromeVisible = true }) {
                             Icon(Icons.Filled.Info, contentDescription = "Details", tint = Color.White)
                         }
