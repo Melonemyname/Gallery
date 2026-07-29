@@ -31,6 +31,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -86,6 +87,10 @@ fun VideoPage(
     val app = context.applicationContext as GalleryApplication
     var playerView by remember(item.id) { mutableStateOf<PlayerView?>(null) }
 
+    // Position überlebt einen Neuaufbau (z. B. wenn Android die App doch beendet),
+    // damit das Video nicht wieder von vorn beginnt.
+    var savedPos by rememberSaveable(item.id) { mutableStateOf(0L) }
+
     val player = remember(item.id) {
         // Großzügigere Pufferung, damit Server-Videos (SMB über Tailscale) nicht stottern:
         // mehr Vorlauf puffern und die Puffergröße nicht an einem Byte-Limit deckeln
@@ -120,6 +125,7 @@ fun VideoPage(
             }
             volume = if (VideoAudioState.muted) 0f else 1f // Ton-Zustand der Sitzung
             prepare()
+            if (savedPos > 0L) seekTo(savedPos)
             playWhenReady = true
         }
     }
@@ -164,6 +170,7 @@ fun VideoPage(
             position = player.currentPosition
             duration = player.duration.takeIf { it > 0 } ?: 0L
             playing = player.isPlaying
+            savedPos = position
             delay(400)
         }
     }
