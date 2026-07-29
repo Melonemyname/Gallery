@@ -81,12 +81,14 @@ fun VideoPage(
         // Großzügigere Pufferung, damit Server-Videos (SMB über Tailscale) nicht stottern:
         // mehr Vorlauf puffern und die Puffergröße nicht an einem Byte-Limit deckeln
         // (wichtig bei hoher Bitrate wie GoPro/DJI-Rohmaterial).
+        // Niedrige Startschwelle (startet früh), aber weiterhin viel Vorlauf im
+        // Hintergrund, damit es nach dem Start nicht stottert.
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                /* minBufferMs = */ 20_000,
+                /* minBufferMs = */ 15_000,
                 /* maxBufferMs = */ 120_000,
-                /* bufferForPlaybackMs = */ 2_500,
-                /* bufferForPlaybackAfterRebufferMs = */ 5_000,
+                /* bufferForPlaybackMs = */ 700,
+                /* bufferForPlaybackAfterRebufferMs = */ 1_500,
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
