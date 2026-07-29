@@ -662,11 +662,12 @@ private fun openForEditing(
         }
         if (runCatching { context.startActivity(edit) }.isSuccess) return true
     } else {
-        // Videos: die Samsung-Galerie nimmt sie nur per Schnellansicht an. "Öffnen"
-        // landet dagegen im separaten Videoplayer, von dem der Weg zum Bearbeiten
-        // umständlicher ist.
+        // Videos: die Samsung-Galerie nimmt sie nur per Schnellansicht an, und die
+        // beantworten mehrere Apps. Daher die Galerie GEZIELT ansprechen; klappt das
+        // nicht, geht es unten normal weiter (Videoplayer).
         val quick = Intent(Intent.ACTION_QUICK_VIEW).apply {
             setDataAndType(uri, mimeType)
+            setPackage("com.sec.android.gallery3d")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         if (runCatching { context.startActivity(quick) }.isSuccess) return true
