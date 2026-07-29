@@ -291,7 +291,9 @@ private fun VideoControls(
         }
 
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            // Links um die Breite des Play-Buttons einrücken, damit die aktuelle Zeit
+            // unter dem Anfang der Zeitleiste steht und nicht am äußersten Rand.
+            modifier = Modifier.fillMaxWidth().padding(start = 48.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(fmtTime(shown.toLong()), color = Color.White, style = MaterialTheme.typography.labelSmall)
