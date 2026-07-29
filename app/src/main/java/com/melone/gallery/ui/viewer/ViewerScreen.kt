@@ -301,10 +301,16 @@ fun ViewerScreen(
         val watch = editWatch
         if (watch != null) {
             scope.launch {
-                val found = withContext(Dispatchers.IO) { findEditedImage(context, watch) }
-                if (found != null) {
-                    editWatch = null
-                    editedFound = watch.item to found
+                // Die Medienbibliothek kennt die neue Datei oft erst ein paar Sekunden
+                // später, daher mehrfach nachsehen statt nur einmal.
+                repeat(10) {
+                    val found = withContext(Dispatchers.IO) { findEditedImage(context, watch) }
+                    if (found != null) {
+                        editWatch = null
+                        editedFound = watch.item to found
+                        return@launch
+                    }
+                    delay(800)
                 }
             }
         }
@@ -763,6 +769,29 @@ private fun findEditedImage(context: android.content.Context, watch: EditWatch):
         .withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, watch.savedId)
     resolver.query(own, arrayOf(MediaStore.Images.Media.DATE_MODIFIED), null, null, null)?.use { c ->
         if (c.moveToFirst() && c.getLong(0) > watch.startSec + 3) return@runCatching own
+    }
+
+    // Letzter Versuch: über den Dateinamen suchen (falls der Editor das Datum des
+    // Originals übernimmt, z. B. "foto(1).jpg" oder "foto_edited.jpg").
+    val dot = watch.item.displayName.lastIndexOf('.')
+    val base = if (dot > 0) watch.item.displayName.substring(0, dot) else watch.item.displayName
+    resolver.query(
+        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+        arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DISPLAY_NAME),
+        "${MediaStore.Images.Media.DISPLAY_NAME} LIKE ?",
+        arrayOf("$base%"),
+        "${MediaStore.Images.Media.DATE_MODIFIED} DESC",
+    )?.use { c ->
+        val idCol = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+        val nameCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
+        while (c.moveToNext()) {
+            val id = c.getLong(idCol)
+            // Nicht unsere unveränderte Kopie und nicht exakt derselbe Name.
+            if (id != watch.savedId && c.getString(nameCol) != watch.item.displayName) {
+                return@runCatching android.content.ContentUris
+                    .withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+            }
+        }
     }
     null
 }.getOrNull()
