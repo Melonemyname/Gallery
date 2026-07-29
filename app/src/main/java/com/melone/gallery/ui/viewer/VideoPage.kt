@@ -140,6 +140,21 @@ fun VideoPage(
 
     LaunchedEffect(isActive) { player.playWhenReady = isActive }
 
+    // Keine Hintergrundwiedergabe: pausieren, sobald die App in den Hintergrund geht
+    // (z. B. beim Wechsel in den Videoplayer oder eine andere App).
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, player) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_PAUSE ||
+                event == androidx.lifecycle.Lifecycle.Event.ON_STOP
+            ) {
+                runCatching { player.pause() }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     var position by remember(item.id) { mutableStateOf(0L) }
     var duration by remember(item.id) { mutableStateOf(0L) }
     var playing by remember(item.id) { mutableStateOf(true) }
