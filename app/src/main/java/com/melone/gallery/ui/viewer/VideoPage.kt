@@ -204,10 +204,11 @@ private fun VideoControls(
 
     Column(
         modifier = Modifier
-            .fillMaxWidth()
             // Im Querformat auf 16:9 begrenzen (wie das Videobild), sonst zieht sich die
             // Steuerung über die ganze Breite bis unter die Systemleisten.
+            // Erst begrenzen, dann füllen — sonst bleibt die Begrenzung wirkungslos.
             .landscape16by9()
+            .fillMaxWidth()
             .padding(start = 12.dp + leftInset, end = 12.dp + rightInset, top = 8.dp, bottom = bottomInset + 88.dp),
     ) {
         Box(modifier = Modifier.fillMaxWidth()) {

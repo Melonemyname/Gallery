@@ -262,7 +262,9 @@ private fun MainScaffold(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.TopCenter,
         ) {
-            Box(modifier = Modifier.fillMaxSize().landscape16by9()) {
+            // Reihenfolge wichtig: erst begrenzen, dann füllen (sonst legt fillMaxSize
+            // die Breite schon fest und die Begrenzung bleibt wirkungslos).
+            Box(modifier = Modifier.landscape16by9().fillMaxSize()) {
                 content(padding)
             }
         }
