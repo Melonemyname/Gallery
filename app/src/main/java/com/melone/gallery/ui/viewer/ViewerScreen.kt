@@ -326,12 +326,9 @@ fun ViewerScreen(
         when (item.source) {
             MediaSource.LOCAL -> {
                 // Lokal: der Editor speichert selbst (inkl. Samsungs Frage Kopie/Original).
-                val intent = Intent(Intent.ACTION_EDIT).apply {
-                    setDataAndType(Uri.parse(item.id), item.mimeType)
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                if (!openForEditing(context, Uri.parse(item.id), item.mimeType)) {
+                    toast("Keine App zum Bearbeiten oder Öffnen gefunden")
                 }
-                runCatching { context.startActivity(Intent.createChooser(intent, "Bearbeiten mit…")) }
-                    .onFailure { toast("Keine Bearbeitungs-App gefunden") }
             }
             MediaSource.SERVER -> {
                 scope.launch {
@@ -344,12 +341,28 @@ fun ViewerScreen(
                     }
                     val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
                     pendingEdit = item to file
-                    val intent = Intent(Intent.ACTION_EDIT).apply {
+                    val edit = Intent(Intent.ACTION_EDIT).apply {
                         setDataAndType(uri, item.mimeType)
                         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
                     }
-                    runCatching { editLauncher.launch(Intent.createChooser(intent, "Bearbeiten mit…")) }
-                        .onFailure { toast("Keine Bearbeitungs-App gefunden"); pendingEdit = null }
+                    val launched = runCatching {
+                        editLauncher.launch(Intent.createChooser(edit, "Bearbeiten mit…"))
+                    }.isSuccess
+                    if (!launched) {
+                        // Kein Editor registriert (z. B. Samsung) → nur öffnen, dort Stift antippen.
+                        val view = Intent(Intent.ACTION_VIEW).apply {
+                            setDataAndType(uri, item.mimeType)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        val ok = runCatching {
+                            context.startActivity(Intent.createChooser(view, "Öffnen mit…"))
+                        }.isSuccess
+                        pendingEdit = null
+                        toast(
+                            if (ok) "Kein direkter Editor: in der Galerie auf das Stift-Symbol tippen"
+                            else "Keine App zum Bearbeiten oder Öffnen gefunden",
+                        )
+                    }
                 }
             }
         }
@@ -627,6 +640,27 @@ private fun android.content.Context.findActivityOrNull(): Activity? {
         c = c.baseContext
     }
     return null
+}
+
+/**
+ * Öffnet ein Bild zum Bearbeiten: zuerst der Standard-Aufruf „Bearbeiten". Gibt es
+ * dafür keine App (Samsung stellt seinen Editor nicht nach außen bereit), wird das
+ * Bild stattdessen in der Galerie geöffnet, wo man den Editor per Stift erreicht.
+ * Liefert false, wenn beides scheitert.
+ */
+private fun openForEditing(context: android.content.Context, uri: Uri, mimeType: String): Boolean {
+    val edit = Intent(Intent.ACTION_EDIT).apply {
+        setDataAndType(uri, mimeType)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+    }
+    if (runCatching { context.startActivity(Intent.createChooser(edit, "Bearbeiten mit…")) }.isSuccess) {
+        return true
+    }
+    val view = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(uri, mimeType)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    return runCatching { context.startActivity(Intent.createChooser(view, "Öffnen mit…")) }.isSuccess
 }
 
 /** Lädt eine Server-Datei in den lokalen Cache (für Bearbeiten). */
