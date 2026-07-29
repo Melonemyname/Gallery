@@ -9,7 +9,9 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.ExitTransition
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.dp
@@ -231,6 +233,16 @@ private fun MainScaffold(
     // Beim Verlassen/Wechsel wieder einblenden, damit die Leiste nie "verloren" wirkt.
     LaunchedEffect(showBottomBar, currentRoute) { if (!showBottomBar) barsVisible = true }
 
+    // Statt die Leiste aus dem Layout zu nehmen (dabei springt der FAB), bleibt sie
+    // stehen und wird zusammen mit dem FAB um dieselbe Strecke nach unten geschoben.
+    var barHeight by remember { mutableStateOf(0.dp) }
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val barOffset by androidx.compose.animation.core.animateDpAsState(
+        targetValue = if (barsVisible) 0.dp else barHeight,
+        animationSpec = androidx.compose.animation.core.tween(250),
+        label = "barOffset",
+    )
+
     androidx.compose.material3.Scaffold(
         floatingActionButton = {
             if (showBottomBar) {
@@ -239,9 +251,11 @@ private fun MainScaffold(
                 // halbe FAB-Breite wieder nach außen, damit er nicht zu weit innen sitzt.
                 FloatingActionButton(
                     onClick = { navController.navigate(Routes.TRASH) },
-                    modifier = Modifier.padding(
-                        end = (landscapeSideInset() - 28.dp).coerceAtLeast(0.dp),
-                    ),
+                    modifier = Modifier
+                        // Gleicher Versatz wie die untere Leiste → beide bewegen sich
+                        // gemeinsam und animiert, statt zu springen.
+                        .offset(y = barOffset)
+                        .padding(end = (landscapeSideInset() - 28.dp).coerceAtLeast(0.dp)),
                 ) {
                     Icon(Icons.Filled.Delete, contentDescription = "Papierkorb")
                 }
@@ -249,12 +263,13 @@ private fun MainScaffold(
         },
         bottomBar = {
             if (showBottomBar) {
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = barsVisible,
-                    enter = androidx.compose.animation.slideInVertically { it } + androidx.compose.animation.fadeIn(),
-                    exit = androidx.compose.animation.slideOutVertically { it } + androidx.compose.animation.fadeOut(),
+                NavigationBar(
+                    modifier = Modifier
+                        .offset(y = barOffset)
+                        .onSizeChanged { size ->
+                            with(density) { barHeight = size.height.toDp() }
+                        },
                 ) {
-                NavigationBar {
                     val tabs = listOf(
                         TopTab(Routes.GALLERY, R.string.nav_pictures),
                         TopTab(Routes.ALBUMS, R.string.nav_albums),
@@ -285,7 +300,6 @@ private fun MainScaffold(
                             label = { Text(stringResource(tab.labelRes)) },
                         )
                     }
-                }
                 }
             }
         },
