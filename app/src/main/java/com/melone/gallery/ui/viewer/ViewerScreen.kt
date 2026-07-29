@@ -507,7 +507,9 @@ fun ViewerScreen(
                     color = Color.Black.copy(alpha = 0.45f),
                 ) {
                     Row(modifier = Modifier.padding(horizontal = 6.dp)) {
-                        if (!currentItem.isVideo) {
+                        // Bearbeiten: alle lokalen Medien (auch Videos) und Server-Bilder.
+                        // Server-Videos bleiben außen vor (müssten erst komplett geladen werden).
+                        if (currentItem.source == MediaSource.LOCAL || !currentItem.isVideo) {
                             IconButton(onClick = { editCurrent() }) {
                                 Icon(Icons.Filled.Edit, contentDescription = "Bearbeiten", tint = Color.White)
                             }
