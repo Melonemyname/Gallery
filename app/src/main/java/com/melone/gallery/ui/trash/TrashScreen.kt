@@ -44,6 +44,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.melone.gallery.ui.AppViewModelFactories
 import com.melone.gallery.ui.components.MediaThumbnail
+import com.melone.gallery.ui.viewer.TrashActions
+import com.melone.gallery.ui.viewer.ViewerScreen
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -156,28 +158,33 @@ fun TrashScreen(onBack: () -> Unit) {
 
     val sel = selected
     if (sel != null) {
-        AlertDialog(
-            onDismissRequest = { selected = null },
-            title = { Text(sel.media.displayName, maxLines = 1) },
-            text = { Text("Wiederherstellen oder endgültig löschen?") },
-            confirmButton = {
-                TextButton(onClick = {
-                    when (sel) {
-                        is TrashItem.Local -> restoreLocal(sel)
-                        is TrashItem.Server -> vm.restoreServer(sel)
+        // Großansicht (mit Zoom/Video) statt Dialog; unten Wiederherstellen + endgültig löschen.
+        val mediaList = remember(sel) { items.map { it.media } }
+        val startIdx = remember(sel) {
+            items.indexOfFirst { it.media.id == sel.media.id }.coerceAtLeast(0)
+        }
+        ViewerScreen(
+            items = mediaList,
+            startIndex = startIdx,
+            onBack = { selected = null },
+            trashActions = TrashActions(
+                onRestore = { m ->
+                    when (val ti = items.firstOrNull { it.media.id == m.id }) {
+                        is TrashItem.Local -> restoreLocal(ti)
+                        is TrashItem.Server -> vm.restoreServer(ti)
+                        null -> {}
                     }
                     selected = null
-                }) { Text("Wiederherstellen") }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    when (sel) {
-                        is TrashItem.Local -> deleteLocal(sel)
-                        is TrashItem.Server -> vm.deleteServerPermanent(sel)
+                },
+                onDeletePermanent = { m ->
+                    when (val ti = items.firstOrNull { it.media.id == m.id }) {
+                        is TrashItem.Local -> deleteLocal(ti)
+                        is TrashItem.Server -> vm.deleteServerPermanent(ti)
+                        null -> {}
                     }
                     selected = null
-                }) { Text("Endgültig löschen") }
-            },
+                },
+            ),
         )
     }
 

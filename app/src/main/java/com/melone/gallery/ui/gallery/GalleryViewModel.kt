@@ -13,11 +13,19 @@ import com.melone.gallery.data.settings.SettingsRepository
 import com.melone.gallery.data.settings.UiPrefs
 import com.melone.gallery.domain.GalleryGrouping
 import com.melone.gallery.domain.GalleryRepository
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import com.melone.gallery.domain.DateFormatters
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 data class GalleryUiState(
@@ -50,6 +58,45 @@ class GalleryViewModel(
     private var lastTokens: Map<String, String> = emptyMap()
     /** Erst nach der ersten Server-Ladung/Cache-Primung darf der Resume-Check laufen. */
     private var serverPrimed = false
+
+    /**
+     * Fertig aufbereitete Zeitachse. Sortieren, Gruppieren und das Formatieren der
+     * Datumszeilen kosten bei mehreren tausend Bildern spürbar Zeit. Früher lief das in der
+     * Komposition, also im Hauptthread, und genau das war das Stocken beim Öffnen der App
+     * und immer dann, wenn die Server-Liste im Hintergrund fertig wurde. Jetzt passiert es
+     * auf [Dispatchers.Default], die Oberfläche bekommt nur noch das Ergebnis.
+     */
+    val timeline: StateFlow<TimelineData> = _state
+        .distinctUntilChanged { old, new ->
+            // Absichtlich Identitätsvergleich: Die Listen werden immer als Ganzes ersetzt,
+            // ein elementweiser Vergleich wäre bei tausenden Einträgen selbst zu teuer.
+            old.localItems === new.localItems &&
+                old.serverItems === new.serverItems &&
+                old.prefs == new.prefs
+        }
+        .map { st -> buildTimeline(st) }
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, TimelineData())
+
+    /**
+     * Dasselbe für die Alben-Ansicht: Sortieren und nach Ordnern gruppieren gehört nicht in
+     * die Komposition.
+     */
+    val albums: StateFlow<AlbumsData> = _state
+        .distinctUntilChanged { old, new ->
+            old.localItems === new.localItems &&
+                old.serverItems === new.serverItems &&
+                old.prefs.albumSort == new.prefs.albumSort
+        }
+        .map { st ->
+            val sort = st.prefs.albumSort
+            AlbumsData(
+                localAlbums = GalleryGrouping.albums(GalleryGrouping.sort(st.localItems, sort)),
+                serverItems = GalleryGrouping.sort(st.serverItems, sort),
+            )
+        }
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, AlbumsData())
 
     /** Liste, über die der Viewer blättert (vom aufrufenden Screen gesetzt). */
     private var viewerList: List<MediaItem> = emptyList()
@@ -102,6 +149,27 @@ class GalleryViewModel(
     fun refresh() {
         if (_state.value.hasPermission) loadLocal()
         loadServer(_state.value.serverFolders)
+    }
+
+    private var localChangeJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * Der Medienbestand des Geräts hat sich geändert (neues Bild von WhatsApp, Screenshot,
+     * Kameraaufnahme, Löschung durch eine andere App). Gemeldet vom
+     * [com.melone.gallery.data.local.MediaStoreWatcher].
+     *
+     * Gedrosselt, weil MediaStore pro Datei mehrere Ereignisse feuert: Jede Meldung schiebt
+     * das Neuladen um [LOCAL_CHANGE_DELAY_MS] nach hinten, ausgeführt wird also erst, wenn
+     * kurz Ruhe ist. Bewusst OHNE Ladeanzeige, das läuft im Hintergrund.
+     */
+    fun onLocalMediaChanged() {
+        if (!_state.value.hasPermission) return
+        localChangeJob?.cancel()
+        localChangeJob = viewModelScope.launch {
+            delay(LOCAL_CHANGE_DELAY_MS)
+            val items = runCatching { repo.loadLocal() }.getOrNull() ?: return@launch
+            _state.update { it.copy(localItems = items) }
+        }
     }
 
     private fun loadLocal() {
@@ -190,6 +258,9 @@ class GalleryViewModel(
     fun visibleItems(): List<MediaItem> = computeVisible(_state.value)
 
     companion object {
+        /** Wartezeit nach der letzten MediaStore-Meldung, bevor neu geladen wird. */
+        private const val LOCAL_CHANGE_DELAY_MS = 700L
+
         fun computeVisible(state: GalleryUiState): List<MediaItem> {
             val combined = when (state.prefs.sourceFilter) {
                 SourceFilter.ALL -> state.localItems + state.serverItems
@@ -204,4 +275,29 @@ class GalleryViewModel(
             return GalleryGrouping.sort(list, state.prefs.sort)
         }
     }
+    private fun buildTimeline(st: GalleryUiState): TimelineData {
+        val structure = buildStructure(st)
+        val flat = structure.flatMap { g -> g.sections.flatMap { it.items } }
+        return TimelineData(
+            structure = structure,
+            flatItems = flat,
+            idToDate = flat.associate { it.id to DateFormatters.monthHeader(it.dateTaken) },
+        )
+    }
+
 }
+
+/** Ergebnis der Aufbereitung: alles, was die Zeitachse zum Zeichnen braucht. */
+data class TimelineData(
+    val structure: List<SourceGroup> = emptyList(),
+    val flatItems: List<com.melone.gallery.data.model.MediaItem> = emptyList(),
+    /** Bild-ID → Monatsüberschrift, für die Blase an der Schnellscroll-Leiste. */
+    val idToDate: Map<String, String> = emptyMap(),
+)
+
+/** Aufbereitete Grundlage der Alben-Ansicht. */
+data class AlbumsData(
+    val localAlbums: List<com.melone.gallery.domain.Album> = emptyList(),
+    /** Server-Medien, bereits nach der Album-Sortierung geordnet. */
+    val serverItems: List<com.melone.gallery.data.model.MediaItem> = emptyList(),
+)

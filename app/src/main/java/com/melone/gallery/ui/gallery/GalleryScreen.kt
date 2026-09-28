@@ -83,10 +83,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -100,6 +103,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.melone.gallery.data.settings.ServerFolder
 import com.melone.gallery.data.transfer.TransferTarget
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.MultiplePermissionsState
@@ -111,6 +115,8 @@ import com.melone.gallery.data.model.SortOption
 import com.melone.gallery.data.model.SourceFilter
 import com.melone.gallery.data.model.ViewMode
 import com.melone.gallery.ui.components.MediaListRow
+import com.melone.gallery.ui.components.dragSelect
+import com.melone.gallery.ui.components.LocalThumbnailsPaused
 import com.melone.gallery.ui.components.MediaThumbnail
 import com.melone.gallery.ui.components.PermissionRequest
 import com.melone.gallery.ui.components.SelectableThumb
@@ -135,15 +141,16 @@ fun GalleryScreen(
     val app = context.applicationContext as com.melone.gallery.GalleryApplication
     val transfer = app.container.mediaTransfer
 
-    val structure = remember(state.localItems, state.serverItems, state.prefs) { buildStructure(state) }
-    val flatItems = remember(structure) { structure.flatMap { g -> g.sections.flatMap { it.items } } }
-    val idToDate = remember(flatItems) {
-        flatItems.associate { it.id to com.melone.gallery.domain.DateFormatters.monthHeader(it.dateTaken) }
-    }
+    // Fertig aufbereitet aus dem ViewModel (läuft dort im Hintergrund, siehe TimelineData).
+    val timeline by viewModel.timeline.collectAsStateWithLifecycle()
+    val structure = timeline.structure
+    val flatItems = timeline.flatItems
+    val idToDate = timeline.idToDate
 
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
     val selectionMode = selected.isNotEmpty()
-    val selectedItems = flatItems.filter { it.id in selected }
+    // Gemerkt, sonst liefe der Filter über tausende Einträge bei JEDER Neuzusammensetzung.
+    val selectedItems = remember(flatItems, selected) { flatItems.filter { it.id in selected } }
     fun toggle(id: String) { selected = if (id in selected) selected - id else selected + id }
     fun clearSel() { selected = emptySet() }
 
@@ -208,7 +215,6 @@ fun GalleryScreen(
             val onItemClick: (MediaItem) -> Unit = { item ->
                 if (selectionMode) toggle(item.id) else onOpenViewer(flatItems, flatItems.indexOf(item))
             }
-            val onItemLong: (MediaItem) -> Unit = { item -> toggle(item.id) }
             when (state.prefs.viewMode) {
                 ViewMode.GRID -> TimelineGrid(
                     structure = structure,
@@ -217,14 +223,14 @@ fun GalleryScreen(
                     idToDate = idToDate,
                     onColumnsChange = viewModel::setGridColumns,
                     onItemClick = onItemClick,
-                    onItemLong = onItemLong,
+                    onSelectedChange = { selected = it },
                 )
                 ViewMode.LIST, ViewMode.DETAILS -> TimelineList(
                     structure = structure,
                     details = state.prefs.viewMode == ViewMode.DETAILS,
                     selected = selected,
                     onItemClick = onItemClick,
-                    onItemLong = onItemLong,
+                    onSelectedChange = { selected = it },
                 )
             }
             if (selectionMode) {
@@ -265,43 +271,55 @@ private fun TimelineGrid(
     idToDate: Map<String, String>,
     onColumnsChange: (Int) -> Unit,
     onItemClick: (MediaItem) -> Unit,
-    onItemLong: (MediaItem) -> Unit,
+    onSelectedChange: (Set<String>) -> Unit,
 ) {
     val gridState = rememberLazyGridState()
     val scope = rememberCoroutineScope()
     val showScrollTop by remember { derivedStateOf { gridState.firstVisibleItemIndex > 8 } }
+    val orderedIds = remember(structure) {
+        structure.flatMap { g -> g.sections.flatMap { s -> s.items.map { it.id } } }
+    }
+
+    // Solange die Schnellscroll-Leiste gezogen wird, keine Vorschaubilder anfordern.
+    var fastScrolling by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        LazyVerticalGrid(
-            state = gridState,
-            columns = GridCells.Fixed(columns),
-            modifier = Modifier
-                .fillMaxSize()
-                .pinchColumns(columns, onColumnsChange),
-            contentPadding = PaddingValues(2.dp),
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            structure.forEach { group ->
-                group.sourceTitle?.let { title ->
-                    item(span = { GridItemSpan(maxLineSpan) }) { SourceHeader(title) }
-                }
-                group.sections.forEach { section ->
-                    item(span = { GridItemSpan(maxLineSpan) }) {
-                        DateHeader(section.title, section.items.size)
+        CompositionLocalProvider(LocalThumbnailsPaused provides fastScrolling) {
+            LazyVerticalGrid(
+                state = gridState,
+                columns = GridCells.Fixed(columns),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pinchColumns(columns, onColumnsChange)
+                    .dragSelect(gridState, orderedIds, selected, onSelectedChange),
+                contentPadding = PaddingValues(2.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                structure.forEach { group ->
+                    group.sourceTitle?.let { title ->
+                        item(span = { GridItemSpan(maxLineSpan) }) { SourceHeader(title) }
                     }
-                    gridItems(section.items, key = { it.id }) { item ->
-                        SelectableThumb(
-                            item = item,
-                            isSelected = item.id in selected,
-                            onClick = onItemClick,
-                            onLong = onItemLong,
-                        )
+                    group.sections.forEach { section ->
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            DateHeader(section.title, section.items.size)
+                        }
+                        gridItems(section.items, key = { it.id }) { item ->
+                            SelectableThumb(
+                                item = item,
+                                isSelected = item.id in selected,
+                                onClick = onItemClick,
+                            )
+                        }
                     }
                 }
             }
         }
-        FastScrollbar(state = gridState, idToDate = idToDate)
+        FastScrollbar(
+            state = gridState,
+            idToDate = idToDate,
+            onDraggingChange = { fastScrolling = it },
+        )
         ScrollToTopButton(visible = showScrollTop) {
             scope.launch { gridState.animateScrollToItem(0) }
         }
@@ -310,46 +328,101 @@ private fun TimelineGrid(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun BoxScope.FastScrollbar(state: LazyGridState, idToDate: Map<String, String>) {
-    val total = state.layoutInfo.totalItemsCount
+private fun BoxScope.FastScrollbar(
+    state: LazyGridState,
+    idToDate: Map<String, String>,
+    onDraggingChange: (Boolean) -> Unit,
+) {
+    // `state.layoutInfo` ändert sich bei JEDEM Scroll-Bild. Direkt in der Komposition
+    // gelesen, würde die Leiste 60-mal je Sekunde neu zusammengesetzt, und dabei liefe
+    // jedes Mal die Suche über `visibleItemsInfo`. `derivedStateOf` meldet nur, wenn sich
+    // das ABGELEITETE Ergebnis wirklich ändert.
+    val totalState = remember(state) { derivedStateOf { state.layoutInfo.totalItemsCount } }
+    val total = totalState.value
     if (total < 40) return
-    val scope = rememberCoroutineScope()
+
     val density = LocalDensity.current
     var dragging by remember { mutableStateOf(false) }
-    var dragFrac by remember { mutableStateOf(0f) }
-    val progress = if (total <= 1) 0f else (state.firstVisibleItemIndex.toFloat() / (total - 1)).coerceIn(0f, 1f)
-    val shownFrac = if (dragging) dragFrac else progress
-    val currentKey = state.layoutInfo.visibleItemsInfo.firstOrNull { it.key is String && idToDate.containsKey(it.key) }?.key
-    val dateLabel = idToDate[currentKey]
+    val dragFrac = remember { mutableFloatStateOf(0f) }
+
+    // Position des Griffs. Bewusst als State-Objekt und NICHT per `by` ausgelesen: Der Wert
+    // wird unten erst im Layout-Schritt (`offset { … }`) gelesen, dadurch reicht ein neues
+    // Anordnen und es braucht keine Neuzusammensetzung je Bild.
+    val shownFrac = remember(state) {
+        derivedStateOf {
+            if (dragging) {
+                dragFrac.floatValue
+            } else if (total <= 1) {
+                0f
+            } else {
+                (state.firstVisibleItemIndex.toFloat() / (total - 1)).coerceIn(0f, 1f)
+            }
+        }
+    }
+
+    // Datumsblase: liest `layoutInfo` nur WÄHREND des Ziehens. Beim normalen Scrollen
+    // entsteht dadurch überhaupt keine Arbeit.
+    val dateLabel by remember(state, idToDate) {
+        derivedStateOf {
+            if (!dragging) {
+                null
+            } else {
+                val key = state.layoutInfo.visibleItemsInfo
+                    .firstOrNull { it.key is String && idToDate.containsKey(it.key) }?.key
+                idToDate[key]
+            }
+        }
+    }
+
+    // Gesprungen wird höchstens EINMAL JE BILD, nicht einmal je Fingerbewegung. Das Gerät
+    // meldet Berührungen deutlich häufiger als es zeichnet; vorher löste jede Meldung einen
+    // eigenen `scrollToItem`-Aufruf aus, und jeder davon baut das komplette sichtbare Raster
+    // neu auf. `withFrameNanos` koppelt das an den Bildtakt, und ein unverändertes Ziel wird
+    // übersprungen.
+    LaunchedEffect(dragging, total) {
+        if (!dragging) return@LaunchedEffect
+        var lastIndex = -1
+        while (isActive) {
+            withFrameNanos { }
+            val index = (dragFrac.floatValue * (total - 1)).toInt().coerceIn(0, (total - 1).coerceAtLeast(0))
+            if (index != lastIndex) {
+                lastIndex = index
+                state.scrollToItem(index)
+            }
+        }
+    }
 
     BoxWithConstraints(modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight()) {
         val trackHpx = constraints.maxHeight.toFloat()
         val thumbH = 48.dp
         val thumbHpx = with(density) { thumbH.toPx() }
-        val thumbYpx = (shownFrac * (trackHpx - thumbHpx)).coerceIn(0f, (trackHpx - thumbHpx).coerceAtLeast(0f))
+        val maxY = (trackHpx - thumbHpx).coerceAtLeast(0f)
+        fun thumbY(): Int = (shownFrac.value * maxY).coerceIn(0f, maxY).roundToInt()
 
-        if (dragging && dateLabel != null) {
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .offset { IntOffset(0, thumbYpx.roundToInt()) }
-                    .padding(end = 34.dp),
-                shape = RoundedCornerShape(8.dp),
-                color = MaterialTheme.colorScheme.primary,
-            ) {
-                Text(
-                    dateLabel,
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    style = MaterialTheme.typography.labelLarge,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                )
+        if (dragging) {
+            dateLabel?.let { label ->
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .offset { IntOffset(0, thumbY()) }
+                        .padding(end = 34.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                ) {
+                    Text(
+                        label,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    )
+                }
             }
         }
 
         Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .offset { IntOffset(0, thumbYpx.roundToInt()) }
+                .offset { IntOffset(0, thumbY()) }
                 .padding(end = 3.dp)
                 .width(6.dp)
                 .height(thumbH)
@@ -362,18 +435,18 @@ private fun BoxScope.FastScrollbar(state: LazyGridState, idToDate: Map<String, S
                 .align(Alignment.CenterEnd)
                 .fillMaxHeight()
                 .width(28.dp)
-                .pointerInput(total) {
+                .pointerInput(Unit) {
                     detectVerticalDragGestures(
                         onDragStart = { off ->
                             dragging = true
-                            dragFrac = (off.y / size.height).coerceIn(0f, 1f)
-                            scope.launch { state.scrollToItem((dragFrac * total).toInt().coerceIn(0, (total - 1).coerceAtLeast(0))) }
+                            onDraggingChange(true)
+                            dragFrac.floatValue = (off.y / size.height).coerceIn(0f, 1f)
                         },
-                        onDragEnd = { dragging = false },
-                        onDragCancel = { dragging = false },
+                        onDragEnd = { dragging = false; onDraggingChange(false) },
+                        onDragCancel = { dragging = false; onDraggingChange(false) },
                     ) { change, _ ->
-                        dragFrac = (change.position.y / size.height).coerceIn(0f, 1f)
-                        scope.launch { state.scrollToItem((dragFrac * total).toInt().coerceIn(0, (total - 1).coerceAtLeast(0))) }
+                        // Nur den Wert setzen; das Scrollen erledigt der Läufer oben.
+                        dragFrac.floatValue = (change.position.y / size.height).coerceIn(0f, 1f)
                     }
                 },
         )
@@ -387,16 +460,21 @@ private fun TimelineList(
     details: Boolean,
     selected: Set<String>,
     onItemClick: (MediaItem) -> Unit,
-    onItemLong: (MediaItem) -> Unit,
+    onSelectedChange: (Set<String>) -> Unit,
 ) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     val showScrollTop by remember { derivedStateOf { listState.firstVisibleItemIndex > 12 } }
+    val orderedIds = remember(structure) {
+        structure.flatMap { g -> g.sections.flatMap { s -> s.items.map { it.id } } }
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .dragSelect(listState, orderedIds, selected, onSelectedChange),
             contentPadding = PaddingValues(vertical = 4.dp),
         ) {
             structure.forEachIndexed { groupIndex, group ->
@@ -412,7 +490,6 @@ private fun TimelineList(
                             item = item,
                             showDetails = details,
                             onClick = { onItemClick(item) },
-                            onLongClick = { onItemLong(item) },
                             selected = item.id in selected,
                         )
                     }
