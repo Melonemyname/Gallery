@@ -1,21 +1,16 @@
 package com.melone.gallery.data.smb
 
 import coil.ImageLoader
-import coil.decode.DataSource
-import coil.decode.ImageSource
 import coil.fetch.FetchResult
 import coil.fetch.Fetcher
-import coil.fetch.SourceResult
 import coil.request.Options
 import com.melone.gallery.data.model.SmbImageModel
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okio.buffer
-import okio.source
 
 /**
- * Coil-Fetcher für [SmbImageModel]. Lädt die Datei über SMB, cached die
- * Original-Bytes in Coils Disk-Cache und liefert sie an den Decoder.
+ * Coil-Fetcher für [SmbImageModel]. Streamt die Datei über SMB in Coils Platten-Cache und
+ * liefert sie von dort an den Decoder. Die Bytes laufen dabei **nie** komplett durch den
+ * Arbeitsspeicher, siehe [smbSourceResult].
  */
 class SmbCoilFetcher(
     private val model: SmbImageModel,
@@ -24,64 +19,21 @@ class SmbCoilFetcher(
     private val smb: SmbManager,
 ) : Fetcher {
 
-    override suspend fun fetch(): FetchResult = withContext(Dispatchers.IO) {
+    override suspend fun fetch(): FetchResult = withContext(smb.fetchDispatcher) {
         val diskCache = imageLoader.diskCache
         val cacheKey = cacheKey(model.share, model.path)
+        val mimeType = guessMimeType(model.path)
 
-        // 1) Aus Disk-Cache bedienen, falls vorhanden.
-        diskCache?.openSnapshot(cacheKey)?.let { snapshot ->
-            return@withContext SourceResult(
-                source = ImageSource(
-                    file = snapshot.data,
-                    fileSystem = diskCache.fileSystem,
-                    diskCacheKey = cacheKey,
-                    closeable = snapshot,
-                ),
-                mimeType = guessMimeType(model.path),
-                dataSource = DataSource.DISK,
+        cachedSourceResult(diskCache, cacheKey, mimeType)
+            ?: smbSourceResult(
+                smb = smb,
+                share = model.share,
+                path = model.path,
+                diskCache = diskCache,
+                cacheKey = cacheKey,
+                mimeType = mimeType,
+                context = options.context,
             )
-        }
-
-        // 2) Über SMB laden.
-        val file = smb.openFile(model.share, model.path)
-        val bytes = try {
-            file.inputStream.source().buffer().use { it.readByteArray() }
-        } finally {
-            runCatching { file.close() }
-        }
-
-        // 3) In den Disk-Cache schreiben (best effort).
-        if (diskCache != null) {
-            val editor = diskCache.openEditor(cacheKey)
-            if (editor != null) {
-                try {
-                    diskCache.fileSystem.write(editor.data) { write(bytes) }
-                    editor.commit()
-                    diskCache.openSnapshot(cacheKey)?.let { snapshot ->
-                        return@withContext SourceResult(
-                            source = ImageSource(
-                                file = snapshot.data,
-                                fileSystem = diskCache.fileSystem,
-                                diskCacheKey = cacheKey,
-                                closeable = snapshot,
-                            ),
-                            mimeType = guessMimeType(model.path),
-                            dataSource = DataSource.NETWORK,
-                        )
-                    }
-                } catch (t: Throwable) {
-                    runCatching { editor.abort() }
-                }
-            }
-        }
-
-        // 4) Fallback: direkt aus den Bytes.
-        val buffer = okio.Buffer().apply { write(bytes) }
-        SourceResult(
-            source = ImageSource(source = buffer, context = options.context),
-            mimeType = guessMimeType(model.path),
-            dataSource = DataSource.NETWORK,
-        )
     }
 
     private fun guessMimeType(path: String): String? = when (path.substringAfterLast('.', "").lowercase()) {

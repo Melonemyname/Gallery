@@ -7,15 +7,26 @@ import androidx.media3.datasource.BaseDataSource
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import com.hierynomus.smbj.share.File
+import java.io.IOException
 
 /**
  * Media3-DataSource, die ein Server-Video per SMB streamt (seekbar).
  * URI-Form: smb://<share>/<pfad innerhalb der Freigabe>
+ *
+ * Robust gegen Aussetzer: puffert ExoPlayer bei hohem Puffer bis zu ~2 min vor, liest also
+ * lange nichts nach. Über Tailscale kann die SMB-Verbindung in dieser Ruhephase abbrechen;
+ * der nächste Read würde dann fehlschlagen und das Video bliebe endgültig stehen. Deshalb
+ * wird ein fehlgeschlagener Read mehrfach wiederholt: erst nur die Datei neu öffnen, dann
+ * die ganze Verbindung neu aufbauen ([SmbManager.invalidate]). Erst wenn auch das nicht
+ * greift, wird eine IOException geworfen (die ExoPlayer-Retry-Policy versucht es dann noch
+ * einmal auf Player-Ebene).
  */
 @UnstableApi
 class SmbDataSource(private val smb: SmbManager) : BaseDataSource(/* isNetwork = */ true) {
 
     private var uri: Uri? = null
+    private var share: String = ""
+    private var path: String = ""
     private var file: File? = null
     private var position: Long = 0
     /** Noch an ExoPlayer zu liefernde Bytes (aus der DataSpec-Länge). */
@@ -34,10 +45,15 @@ class SmbDataSource(private val smb: SmbManager) : BaseDataSource(/* isNetwork =
         transferInitializing(dataSpec)
         val u = dataSpec.uri
         uri = u
-        val share = u.host ?: throw IllegalArgumentException("SMB-URI ohne Share: $u")
-        val path = (u.path ?: "").trimStart('/')
+        share = u.host ?: throw IOException("SMB-URI ohne Share: $u")
+        path = (u.path ?: "").trimStart('/')
 
-        val f = smb.openFile(share, path)
+        val f = try {
+            smb.openFile(share, path)
+        } catch (t: Throwable) {
+            // Als IOException melden, damit ExoPlayer die Load-Retry-Policy anwendet.
+            throw IOException("SMB-Datei konnte nicht geöffnet werden: $path", t)
+        }
         file = f
         val size = f.fileInformation.standardInformation.endOfFile
 
@@ -63,14 +79,7 @@ class SmbDataSource(private val smb: SmbManager) : BaseDataSource(/* isNetwork =
         // Blockpuffer nachfüllen, wenn leer.
         if (blockOff >= blockLen) {
             if (srcRemaining == 0L) return C.RESULT_END_OF_INPUT
-            val f = file ?: return C.RESULT_END_OF_INPUT
-            val want = minOf(BLOCK_SIZE.toLong(), srcRemaining).toInt()
-            val read = f.read(block, position, 0, want)
-            if (read <= 0) return C.RESULT_END_OF_INPUT
-            position += read
-            srcRemaining -= read
-            blockLen = read
-            blockOff = 0
+            if (!fillBlock()) return C.RESULT_END_OF_INPUT
         }
 
         val n = minOf(length, blockLen - blockOff)
@@ -79,6 +88,54 @@ class SmbDataSource(private val smb: SmbManager) : BaseDataSource(/* isNetwork =
         bytesRemaining -= n
         bytesTransferred(n)
         return n
+    }
+
+    /**
+     * Füllt den Blockpuffer aus SMB nach – mit Wiederholung bei Aussetzern. Gibt false zurück,
+     * wenn regulär das Dateiende erreicht ist. Wirft IOException, wenn alle Versuche scheitern.
+     */
+    private fun fillBlock(): Boolean {
+        val want = minOf(BLOCK_SIZE.toLong(), srcRemaining).toInt()
+        var lastError: Throwable? = null
+        for (attempt in 0..MAX_RETRIES) {
+            try {
+                val f = file ?: reopenFile()
+                val read = f.read(block, position, 0, want)
+                if (read > 0) {
+                    position += read
+                    srcRemaining -= read
+                    blockLen = read
+                    blockOff = 0
+                    return true
+                }
+                // read < 0 heißt EOF. Kommt es, obwohl laut Größe noch Daten fehlen, ist es
+                // ein Aussetzer (Verbindung tot) → als Fehler behandeln und neu versuchen.
+                if (srcRemaining <= 0L) return false
+                lastError = IOException("Unerwartetes SMB-EOF bei position=$position (read=$read)")
+            } catch (t: Throwable) {
+                lastError = t
+            }
+
+            if (attempt >= MAX_RETRIES) break
+            // Vor dem nächsten Versuch aufräumen: Datei-Handle schließen, ab dem zweiten
+            // Versuch zusätzlich die ganze Verbindung verwerfen (frischer Neuaufbau).
+            runCatching { file?.close() }
+            file = null
+            if (attempt >= 1) runCatching { smb.invalidate() }
+            try {
+                Thread.sleep(BACKOFF_MS * (attempt + 1))
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+            runCatching { file = smb.openFile(share, path) }
+        }
+        throw IOException("SMB-Read endgültig fehlgeschlagen bei position=$position", lastError)
+    }
+
+    private fun reopenFile(): File {
+        val f = smb.openFile(share, path)
+        file = f
+        return f
     }
 
     override fun getUri(): Uri? = uri
@@ -106,5 +163,8 @@ class SmbDataSource(private val smb: SmbManager) : BaseDataSource(/* isNetwork =
     private companion object {
         // 1 MB pro SMB-Read: wenige Roundtrips über Tailscale statt vieler Mini-Reads.
         const val BLOCK_SIZE = 1 shl 20
+        // Wiederholungen bei Read-Fehlern (Verbindungsaussetzer), mit steigender Wartezeit.
+        const val MAX_RETRIES = 4
+        const val BACKOFF_MS = 400L
     }
 }

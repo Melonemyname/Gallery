@@ -15,6 +15,9 @@ import com.hierynomus.smbj.share.DiskShare
 import com.hierynomus.smbj.share.File
 import com.rapid7.client.dcerpc.mssrvs.ServerService
 import com.rapid7.client.dcerpc.transport.SMBTransportFactories
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import java.util.EnumSet
 import java.util.concurrent.TimeUnit
 
@@ -49,6 +52,16 @@ data class SmbTrashEntry(
 class SmbManager {
 
     private val lock = Any()
+
+    /**
+     * Dispatcher für alle Coil-Fetcher. Die Begrenzung ist wichtig: Das Raster stellt pro
+     * sichtbarer Kachel einen eigenen Auftrag, und auf `Dispatchers.IO` liefen die alle
+     * gleichzeitig los. Über das hochlatente Tailscale-Netz bringt das nichts, es verstopft
+     * nur die Leitung, und jeder laufende Auftrag belegt Speicher. Vier gleichzeitige Leser
+     * sind der Punkt, ab dem mehr Parallelität nichts mehr bringt.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val fetchDispatcher: CoroutineDispatcher = Dispatchers.IO.limitedParallelism(MAX_PARALLEL_FETCHES)
 
     @Volatile
     private var creds: SmbCredentials? = null
@@ -206,6 +219,37 @@ class SmbManager {
         }
     }
 
+    /**
+     * Schreibt/überschreibt eine Datei aus [bytes] und legt fehlende Elternordner an.
+     * Für eigene Vorschaubilder unter `.thumbs/<unterordner>/…` nötig (writeFile allein
+     * kann in nicht existierenden Ordnern nicht anlegen).
+     */
+    fun writeFileMkdirs(shareName: String, path: String, bytes: ByteArray) {
+        val ds = shareLocked(shareName)
+        val rel = path.trim().trim('/')
+        val dir = rel.substringBeforeLast('/', "")
+        if (dir.isNotEmpty()) {
+            var acc = ""
+            for (seg in dir.split('/')) {
+                acc = if (acc.isEmpty()) seg else "$acc/$seg"
+                runCatching { ds.mkdir(normalize(acc)) }
+            }
+        }
+        val f = ds.openFile(
+            normalize(rel),
+            EnumSet.of(AccessMask.GENERIC_WRITE),
+            null,
+            SMB2ShareAccess.ALL,
+            SMB2CreateDisposition.FILE_OVERWRITE_IF,
+            null,
+        )
+        try {
+            f.outputStream.use { out -> out.write(bytes) }
+        } finally {
+            runCatching { f.close() }
+        }
+    }
+
     /** Löscht eine Datei. */
     fun deleteFile(shareName: String, path: String) {
         val ds = shareLocked(shareName)
@@ -339,4 +383,17 @@ class SmbManager {
     }
 
     fun shutdown() = synchronized(lock) { closeInternal() }
+
+    /**
+     * Verwirft die aktuelle Verbindung/Session und den Share-Cache, sodass der nächste
+     * Zugriff frisch neu verbindet. Für die Wiederherstellung beim Video-Streaming: fällt
+     * eine über Tailscale idle gewordene SMB-Verbindung aus, kann [SmbDataSource] hiermit
+     * einen sauberen Neuaufbau erzwingen, statt auf einem toten Handle hängen zu bleiben.
+     */
+    fun invalidate() = synchronized(lock) { closeInternal() }
+    private companion object {
+        /** Gleichzeitige SMB-Leser für Vorschaubilder und Vollbilder. */
+        const val MAX_PARALLEL_FETCHES = 4
+    }
+
 }
