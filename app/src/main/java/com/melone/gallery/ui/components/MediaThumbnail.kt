@@ -26,6 +26,16 @@ import com.melone.gallery.data.model.MediaItem
 import com.melone.gallery.data.model.MediaSource
 import com.melone.gallery.domain.Formatters
 
+/**
+ * true, solange der Nutzer die Schnellscroll-Leiste zieht.
+ *
+ * Dann werden **keine** Vorschaubilder angefordert. Ein Zug über mehrere tausend Bilder
+ * baut sonst pro Bild ein ganzes Raster neu auf und stößt hunderte Ladeaufträge an, die
+ * sofort wieder verworfen werden. Genau das war das Ruckeln. Sobald man loslässt, laden
+ * die sichtbaren Kacheln ganz normal.
+ */
+val LocalThumbnailsPaused = androidx.compose.runtime.compositionLocalOf { false }
+
 @Composable
 fun MediaThumbnail(
     item: MediaItem,
@@ -51,15 +61,17 @@ fun MediaThumbnail(
                 modifier = Modifier.align(Alignment.Center).size(32.dp),
             )
         }
-        AsyncImage(
-            model = ImageRequest.Builder(context)
-                .data(item.thumbModel)
-                .crossfade(true)
-                .build(),
-            contentDescription = item.displayName,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize(),
-        )
+        if (!LocalThumbnailsPaused.current) {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(item.thumbModel)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = item.displayName,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
 
         if (item.isVideo && showVideoBadges) {
             Icon(
