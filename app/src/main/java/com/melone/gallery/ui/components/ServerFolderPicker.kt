@@ -43,6 +43,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
+ * Server-Ordner, die nie angezeigt werden: vorgenerierte Vorschaubilder, der
+ * eigene Papierkorb und die Versionierung von Syncthing.
+ */
+private val hiddenServerDirs = setOf(".thumbs", ".trash", ".stversions")
+
+/**
  * Ziel-Auswahl fürs Verschieben/Kopieren: man navigiert in der App durch die
  * Server-Freigaben und Unterordner (wie beim normalen Stöbern) und wählt mit
  * „Hierher" den aktuellen Ordner als Ziel. Zusätzlich Gerät-Ordner über SAF.
@@ -80,7 +86,7 @@ fun ServerFolderPickerDialog(
         val result = withContext(Dispatchers.IO) {
             runCatching {
                 smb.list(s, path)
-                    .filter { it.isDirectory && it.name != ".thumbs" && it.name != ".trash" }
+                    .filter { it.isDirectory && it.name !in hiddenServerDirs }
                     .map { it.name }
                     .sortedBy { it.lowercase() }
             }

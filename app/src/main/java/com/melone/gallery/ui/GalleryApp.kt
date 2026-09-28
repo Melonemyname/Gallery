@@ -45,6 +45,7 @@ import androidx.compose.ui.res.stringResource
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.melone.gallery.data.model.StartTab
@@ -120,6 +121,17 @@ fun GalleryApp() {
     // Beim Zurückkehren in den Vordergrund den Server aktualisieren (gedrosselt).
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         galleryVm.refreshServerOnResume()
+    }
+
+    // Neue Bilder auf dem Gerät (WhatsApp, Kamera, Screenshot) sollen von selbst
+    // auftauchen, ohne dass man von Hand aktualisiert. Läuft nur, solange die App sichtbar
+    // ist; das Drosseln übernimmt das ViewModel.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        val watcher = com.melone.gallery.data.local.MediaStoreWatcher(context)
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            watcher.changes().collect { galleryVm.onLocalMediaChanged() }
+        }
     }
 
     // Externe Bearbeitung eines Server-Bildes: Ergebnis suchen und Zurückschieben anbieten.

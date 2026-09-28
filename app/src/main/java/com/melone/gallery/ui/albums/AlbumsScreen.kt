@@ -15,10 +15,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items as listItems
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -62,9 +64,25 @@ import com.melone.gallery.domain.StorageKind
 import com.melone.gallery.ui.components.MediaListRow
 import com.melone.gallery.ui.components.MediaThumbnail
 import com.melone.gallery.ui.components.SelectableThumb
+import com.melone.gallery.ui.components.dragSelect
 import com.melone.gallery.ui.components.SelectionActionsBar
 import com.melone.gallery.ui.components.SelectionTopBar
 import com.melone.gallery.ui.gallery.GalleryViewModel
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -85,19 +103,76 @@ fun AlbumsScreen(
     // Alben nutzen eine eigene Sortierung/Ansicht (getrennt von der Bilder-Timeline).
     val albumSort = state.prefs.albumSort
     val albumViewMode = state.prefs.albumViewMode
-    val localAlbums = remember(state.localItems, albumSort) {
-        GalleryGrouping.albums(GalleryGrouping.sort(state.localItems, albumSort))
-    }
-    val serverItems = remember(state.serverItems, albumSort) {
-        GalleryGrouping.sort(state.serverItems, albumSort)
-    }
+    // Fertig aufbereitet aus dem ViewModel (läuft dort im Hintergrund, siehe AlbumsData).
+    val albumsData by viewModel.albums.collectAsStateWithLifecycle()
+    val localAlbums = albumsData.localAlbums
+    val serverItems = albumsData.serverItems
 
-    // Auswahlmodus (langes Halten) innerhalb eines Albums/Ordners.
+    // Datei-Auswahlmodus (langes Halten) innerhalb eines Albums/Ordners.
     var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
-    // Beim Navigieren (anderes Album/Ebene) die Auswahl zurücksetzen.
-    LaunchedEffect(nav) { selected = emptySet() }
-    val onToggle: (String) -> Unit = { id -> selected = if (id in selected) selected - id else selected + id }
+    // Album-Auswahlmodus (langes Halten auf eine Album-/Ordner-Kachel) für ganze Alben.
+    var selectedAlbums by remember { mutableStateOf<Set<String>>(emptySet()) }
+    // Beim Navigieren (anderes Album/Ebene) beide Auswahlen zurücksetzen.
+    LaunchedEffect(nav) { selected = emptySet(); selectedAlbums = emptySet() }
+    // Datei- und Album-Auswahl schließen sich gegenseitig aus.
+    val onToggle: (String) -> Unit = { id ->
+        selectedAlbums = emptySet()
+        selected = if (id in selected) selected - id else selected + id
+    }
     val clearSel: () -> Unit = { selected = emptySet() }
+    val onToggleAlbum: (String) -> Unit = { key ->
+        selected = emptySet()
+        selectedAlbums = if (key in selectedAlbums) selectedAlbums - key else selectedAlbums + key
+    }
+    val clearAlbumSel: () -> Unit = { selectedAlbums = emptySet() }
+
+    // Ganze Alben löschen (Auswahl → untere „Löschen"-Leiste): alle Elemente der gewählten
+    // Alben in den Papierkorb (Server `.trash` / lokal System-Papierkorb, 30 Tage) – dieselben
+    // Primitive wie die Datei-Auswahl-Löschen-Logik.
+    val context = LocalContext.current
+    val transfer = (context.applicationContext as com.melone.gallery.GalleryApplication)
+        .container.mediaTransfer
+    val deleteScope = rememberCoroutineScope()
+    var pendingLocalDeleteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    val localTrashLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult(),
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            viewModel.removeLocalItems(pendingLocalDeleteIds)
+        }
+        pendingLocalDeleteIds = emptySet()
+    }
+    fun performAlbumDelete(items: List<MediaItem>) {
+        val servers = items.filter { it.source == MediaSource.SERVER }
+        val locals = items.filter { it.source == MediaSource.LOCAL }
+        if (servers.isNotEmpty()) {
+            deleteScope.launch {
+                val now = System.currentTimeMillis()
+                servers.forEach { runCatching { transfer.trashServerSource(it, now) } }
+                viewModel.removeServerItems(servers.map { it.id }.toSet())
+            }
+        }
+        if (locals.isNotEmpty() && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            pendingLocalDeleteIds = locals.map { it.id }.toSet()
+            runCatching {
+                val pi = android.provider.MediaStore.createTrashRequest(
+                    context.contentResolver, locals.map { android.net.Uri.parse(it.id) }, true,
+                )
+                localTrashLauncher.launch(IntentSenderRequest.Builder(pi.intentSender).build())
+            }
+        }
+    }
+    // Schlüssel eines gewählten Albums ("L:<id>" / "S:<pfad>") → seine Elemente.
+    fun albumItemsOf(key: String): List<MediaItem> = when {
+        key.startsWith("L:") -> localAlbums.find { it.id == key.removePrefix("L:") }?.items ?: emptyList()
+        key.startsWith("S:") -> GalleryGrouping.itemsUnder(serverItems, key.removePrefix("S:"))
+        else -> emptyList()
+    }
+    fun deleteSelectedAlbums() {
+        val items = selectedAlbums.flatMap { albumItemsOf(it) }.distinctBy { it.id }
+        selectedAlbums = emptySet()
+        performAlbumDelete(items)
+    }
 
     // Zurück im Album/Ordner: eine Ebene hoch. Hier (im Alben-Ziel) verankert, damit
     // es nicht durch verzögerten Routen-Status fälschlich zu „Bilder" springt.
@@ -113,6 +188,8 @@ fun AlbumsScreen(
             },
         )
     }
+    // Im Album-Auswahlmodus beendet Zurück erst die Auswahl (Vorrang vor „Ebene hoch").
+    BackHandler(enabled = selectedAlbums.isNotEmpty()) { clearAlbumSel() }
 
     // Kopfzeile blendet sich beim Scrollen aus und wieder ein (wie bei Bildern),
     // aber nur im Querformat; im Hochformat bleibt sie stehen.
@@ -120,73 +197,104 @@ fun AlbumsScreen(
     val landscape = com.melone.gallery.ui.components.isLandscape()
     LaunchedEffect(landscape) { if (!landscape) scrollBehavior.state.heightOffset = 0f }
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .padding(contentPadding)
-            .then(
-                if (selected.isEmpty() && landscape) Modifier.nestedScroll(scrollBehavior.nestedScrollConnection)
-                else Modifier,
-            ),
+            .padding(contentPadding),
     ) {
-        when {
-            nav.startsWith("L:") -> {
-                val album = localAlbums.find { it.id == nav.removePrefix("L:") }
-                if (album == null) {
-                    // Album verschwunden (z. B. alle Elemente gelöscht) → zurück zur Wurzel.
-                    LaunchedEffect(nav) { onNavChange("") }
-                } else {
-                    LocalAlbumLevel(
-                        album = album,
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .then(
+                    if (selected.isEmpty() && selectedAlbums.isEmpty() && landscape)
+                        Modifier.nestedScroll(scrollBehavior.nestedScrollConnection)
+                    else Modifier,
+                ),
+        ) {
+            when {
+                nav.startsWith("L:") -> {
+                    val album = localAlbums.find { it.id == nav.removePrefix("L:") }
+                    if (album == null) {
+                        // Album verschwunden (z. B. alle Elemente gelöscht) → zurück zur Wurzel.
+                        LaunchedEffect(nav) { onNavChange("") }
+                    } else {
+                        LocalAlbumLevel(
+                            album = album,
+                            scrollBehavior = scrollBehavior,
+                            viewMode = albumViewMode,
+                            columns = state.prefs.gridColumns,
+                            onSetViewMode = viewModel::setAlbumViewMode,
+                            sort = albumSort,
+                            onSetSort = viewModel::setAlbumSort,
+                            onBack = { onNavChange("") },
+                            onOpenViewer = onOpenViewer,
+                            selected = selected,
+                            onToggle = onToggle,
+                            onSelectedChange = { selected = it },
+                            onClearSel = clearSel,
+                            serverFolders = state.serverFolders,
+                            viewModel = viewModel,
+                        )
+                    }
+                }
+                nav.startsWith("S:") -> {
+                    val path = nav.removePrefix("S:")
+                    ServerFolderLevel(
+                        path = path,
+                        serverItems = serverItems,
                         scrollBehavior = scrollBehavior,
                         viewMode = albumViewMode,
                         columns = state.prefs.gridColumns,
                         onSetViewMode = viewModel::setAlbumViewMode,
                         sort = albumSort,
                         onSetSort = viewModel::setAlbumSort,
-                        onBack = { onNavChange("") },
+                        onEnter = { child -> onNavChange("S:$child") },
+                        onBack = {
+                            onNavChange(if (path.contains('/')) "S:" + path.substringBeforeLast('/') else "")
+                        },
                         onOpenViewer = onOpenViewer,
                         selected = selected,
                         onToggle = onToggle,
+                        onSelectedChange = { selected = it },
                         onClearSel = clearSel,
+                        selectedAlbums = selectedAlbums,
+                        onToggleAlbum = onToggleAlbum,
+                        onClearAlbumSel = clearAlbumSel,
                         serverFolders = state.serverFolders,
                         viewModel = viewModel,
                     )
                 }
-            }
-            nav.startsWith("S:") -> {
-                val path = nav.removePrefix("S:")
-                ServerFolderLevel(
-                    path = path,
-                    serverItems = serverItems,
+                else -> RootLevel(
+                    localAlbums = localAlbums,
+                    serverFolders = GalleryGrouping.serverFolder(serverItems, "").folders,
+                    loading = state.isLoading,
                     scrollBehavior = scrollBehavior,
-                    viewMode = albumViewMode,
-                    columns = state.prefs.gridColumns,
-                    onSetViewMode = viewModel::setAlbumViewMode,
-                    sort = albumSort,
-                    onSetSort = viewModel::setAlbumSort,
-                    onEnter = { child -> onNavChange("S:$child") },
-                    onBack = {
-                        onNavChange(if (path.contains('/')) "S:" + path.substringBeforeLast('/') else "")
-                    },
-                    onOpenViewer = onOpenViewer,
-                    selected = selected,
-                    onToggle = onToggle,
-                    onClearSel = clearSel,
-                    serverFolders = state.serverFolders,
-                    viewModel = viewModel,
+                    onOpenLocal = { onNavChange("L:${it.id}") },
+                    onOpenServer = { onNavChange("S:${it.path}") },
+                    onRefresh = viewModel::refresh,
+                    onOpenSettings = onOpenSettings,
+                    selectedAlbums = selectedAlbums,
+                    onToggleAlbum = onToggleAlbum,
+                    onClearAlbumSel = clearAlbumSel,
                 )
             }
-            else -> RootLevel(
-                localAlbums = localAlbums,
-                serverFolders = GalleryGrouping.serverFolder(serverItems, "").folders,
-                loading = state.isLoading,
-                scrollBehavior = scrollBehavior,
-                onOpenLocal = { onNavChange("L:${it.id}") },
-                onOpenServer = { onNavChange("S:${it.path}") },
-                onRefresh = viewModel::refresh,
-                onOpenSettings = onOpenSettings,
-            )
+        }
+
+        // Untere Leiste im Album-Auswahlmodus: bewusst NUR „Löschen" (wie bei Bildern,
+        // aber auf die eine sinnvolle Album-Aktion reduziert).
+        if (selectedAlbums.isNotEmpty()) {
+            Surface(
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp),
+                shape = RoundedCornerShape(28.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                tonalElevation = 3.dp,
+            ) {
+                Row(modifier = Modifier.padding(horizontal = 6.dp)) {
+                    IconButton(onClick = { deleteSelectedAlbums() }) {
+                        Icon(Icons.Filled.Delete, contentDescription = "Löschen")
+                    }
+                }
+            }
         }
     }
 }
@@ -202,24 +310,31 @@ private fun RootLevel(
     onOpenServer: (com.melone.gallery.domain.FolderEntry) -> Unit,
     onRefresh: () -> Unit,
     onOpenSettings: () -> Unit,
+    selectedAlbums: Set<String>,
+    onToggleAlbum: (String) -> Unit,
+    onClearAlbumSel: () -> Unit,
 ) {
-    TopAppBar(
-        scrollBehavior = scrollBehavior,
-        // Statusleisten-Abstand kommt schon über das Scaffold-contentPadding.
-        windowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
-        title = { Text("Alben") },
-        actions = {
-            if (loading) {
-                CircularProgressIndicator(modifier = Modifier.size(20.dp).padding(end = 4.dp), strokeWidth = 2.dp)
-            }
-            IconButton(onClick = onRefresh) {
-                Icon(Icons.Filled.Refresh, contentDescription = "Aktualisieren")
-            }
-            IconButton(onClick = onOpenSettings) {
-                Icon(Icons.Filled.Settings, contentDescription = "Einstellungen")
-            }
-        },
-    )
+    if (selectedAlbums.isNotEmpty()) {
+        SelectionTopBar(count = selectedAlbums.size, onClose = onClearAlbumSel)
+    } else {
+        TopAppBar(
+            scrollBehavior = scrollBehavior,
+            // Statusleisten-Abstand kommt schon über das Scaffold-contentPadding.
+            windowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
+            title = { Text("Alben") },
+            actions = {
+                if (loading) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp).padding(end = 4.dp), strokeWidth = 2.dp)
+                }
+                IconButton(onClick = onRefresh) {
+                    Icon(Icons.Filled.Refresh, contentDescription = "Aktualisieren")
+                }
+                IconButton(onClick = onOpenSettings) {
+                    Icon(Icons.Filled.Settings, contentDescription = "Einstellungen")
+                }
+            },
+        )
+    }
     if (localAlbums.isEmpty() && serverFolders.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("Keine Alben.", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -236,24 +351,30 @@ private fun RootLevel(
         if (localAlbums.isNotEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) { SectionTitle("Auf dem Gerät") }
             items(localAlbums, key = { "L:${it.id}" }) { album ->
+                val key = "L:${album.id}"
                 FolderCard(
                     name = album.name,
                     cover = album.cover,
                     count = album.count,
                     storageKinds = album.storageKinds,
-                    onClick = { onOpenLocal(album) },
+                    isSelected = key in selectedAlbums,
+                    onClick = { if (selectedAlbums.isNotEmpty()) onToggleAlbum(key) else onOpenLocal(album) },
+                    onLongClick = { onToggleAlbum(key) },
                 )
             }
         }
         if (serverFolders.isNotEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) { SectionTitle("Server") }
             items(serverFolders, key = { "S:${it.path}" }) { entry ->
+                val key = "S:${entry.path}"
                 FolderCard(
                     name = entry.name,
                     cover = entry.cover,
                     count = entry.count,
                     storageKinds = emptySet(),
-                    onClick = { onOpenServer(entry) },
+                    isSelected = key in selectedAlbums,
+                    onClick = { if (selectedAlbums.isNotEmpty()) onToggleAlbum(key) else onOpenServer(entry) },
+                    onLongClick = { onToggleAlbum(key) },
                 )
             }
         }
@@ -276,20 +397,26 @@ private fun ServerFolderLevel(
     onOpenViewer: (List<MediaItem>, Int) -> Unit,
     selected: Set<String>,
     onToggle: (String) -> Unit,
+    onSelectedChange: (Set<String>) -> Unit,
     onClearSel: () -> Unit,
+    selectedAlbums: Set<String>,
+    onToggleAlbum: (String) -> Unit,
+    onClearAlbumSel: () -> Unit,
     serverFolders: List<com.melone.gallery.data.settings.ServerFolder>,
     viewModel: GalleryViewModel,
 ) {
     val view = remember(serverItems, path) { GalleryGrouping.serverFolder(serverItems, path) }
     val selectionMode = selected.isNotEmpty()
+    val albumSelActive = selectedAlbums.isNotEmpty()
     val selectedItems = view.items.filter { it.id in selected }
-    // Im Auswahlmodus: Zurück beendet erst die Auswahl.
+    // Im Datei-Auswahlmodus: Zurück beendet erst die Auswahl. (Die Album-Auswahl behandelt
+    // der BackHandler auf AlbumsScreen-Ebene.)
     BackHandler(enabled = selectionMode) { onClearSel() }
 
-    if (selectionMode) {
-        SelectionTopBar(count = selected.size, onClose = onClearSel)
-    } else {
-        TopAppBar(
+    when {
+        albumSelActive -> SelectionTopBar(count = selectedAlbums.size, onClose = onClearAlbumSel)
+        selectionMode -> SelectionTopBar(count = selected.size, onClose = onClearSel)
+        else -> TopAppBar(
             scrollBehavior = scrollBehavior,
             windowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0),
             title = { Text(path.substringAfterLast('/'), maxLines = 1, overflow = TextOverflow.Ellipsis) },
@@ -308,20 +435,32 @@ private fun ServerFolderLevel(
     val onItemClick: (MediaItem) -> Unit = { item ->
         if (selectionMode) onToggle(item.id) else onOpenViewer(view.items, view.items.indexOf(item))
     }
+    val gridState = rememberLazyGridState()
+    val listState = rememberLazyListState()
+    val orderedIds = remember(view.items) { view.items.map { it.id } }
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (viewMode == ViewMode.GRID) {
             LazyVerticalGrid(
+                state = gridState,
                 columns = GridCells.Fixed(3),
                 contentPadding = PaddingValues(6.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .dragSelect(gridState, orderedIds, selected, onSelectedChange),
             ) {
                 if (view.folders.isNotEmpty()) {
                     item(span = { GridItemSpan(maxLineSpan) }) { SectionTitle("Ordner") }
                     items(view.folders, key = { "S:${it.path}" }) { entry ->
-                        FolderCard(entry.name, entry.cover, entry.count, emptySet()) { onEnter(entry.path) }
+                        val key = "S:${entry.path}"
+                        FolderCard(
+                            entry.name, entry.cover, entry.count, emptySet(),
+                            isSelected = key in selectedAlbums,
+                            onClick = { if (selectedAlbums.isNotEmpty()) onToggleAlbum(key) else onEnter(entry.path) },
+                            onLongClick = { onToggleAlbum(key) },
+                        )
                     }
                 }
                 if (view.items.isNotEmpty()) {
@@ -331,17 +470,28 @@ private fun ServerFolderLevel(
                             item = item,
                             isSelected = item.id in selected,
                             onClick = onItemClick,
-                            onLong = { onToggle(item.id) },
                         )
                     }
                 }
             }
         } else {
-            LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 4.dp)) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .dragSelect(listState, orderedIds, selected, onSelectedChange),
+                contentPadding = PaddingValues(vertical = 4.dp),
+            ) {
                 if (view.folders.isNotEmpty()) {
                     item { SectionTitle("Ordner") }
                     listItems(view.folders, key = { "S:${it.path}" }) { entry ->
-                        FolderRow(entry.name, entry.count) { onEnter(entry.path) }
+                        val key = "S:${entry.path}"
+                        FolderRow(
+                            entry.name, entry.count,
+                            isSelected = key in selectedAlbums,
+                            onClick = { if (selectedAlbums.isNotEmpty()) onToggleAlbum(key) else onEnter(entry.path) },
+                            onLongClick = { onToggleAlbum(key) },
+                        )
                     }
                 }
                 if (view.items.isNotEmpty()) {
@@ -351,7 +501,6 @@ private fun ServerFolderLevel(
                             item = item,
                             showDetails = viewMode == ViewMode.DETAILS,
                             onClick = { onItemClick(item) },
-                            onLongClick = { onToggle(item.id) },
                             selected = item.id in selected,
                         )
                     }
@@ -384,6 +533,7 @@ private fun LocalAlbumLevel(
     onOpenViewer: (List<MediaItem>, Int) -> Unit,
     selected: Set<String>,
     onToggle: (String) -> Unit,
+    onSelectedChange: (Set<String>) -> Unit,
     onClearSel: () -> Unit,
     serverFolders: List<com.melone.gallery.data.settings.ServerFolder>,
     viewModel: GalleryViewModel,
@@ -414,33 +564,43 @@ private fun LocalAlbumLevel(
     val onItemClick: (MediaItem) -> Unit = { item ->
         if (selectionMode) onToggle(item.id) else onOpenViewer(album.items, album.items.indexOf(item))
     }
+    val gridState = rememberLazyGridState()
+    val listState = rememberLazyListState()
+    val orderedIds = remember(album.items) { album.items.map { it.id } }
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (viewMode == ViewMode.GRID) {
             LazyVerticalGrid(
+                state = gridState,
                 columns = GridCells.Fixed(columns),
                 contentPadding = PaddingValues(2.dp),
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .dragSelect(gridState, orderedIds, selected, onSelectedChange),
             ) {
                 items(album.items, key = { it.id }) { item ->
                     SelectableThumb(
                         item = item,
                         isSelected = item.id in selected,
                         onClick = onItemClick,
-                        onLong = { onToggle(item.id) },
                     )
                 }
             }
         } else {
-            LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 4.dp)) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .dragSelect(listState, orderedIds, selected, onSelectedChange),
+                contentPadding = PaddingValues(vertical = 4.dp),
+            ) {
                 listItems(album.items, key = { it.id }) { item ->
                     MediaListRow(
                         item = item,
                         showDetails = viewMode == ViewMode.DETAILS,
                         onClick = { onItemClick(item) },
-                        onLongClick = { onToggle(item.id) },
                         selected = item.id in selected,
                     )
                 }
@@ -527,12 +687,26 @@ private fun ViewModeButton(current: ViewMode, onSet: (ViewMode) -> Unit) {
 }
 
 @Composable
-private fun FolderRow(name: String, count: Int, onClick: () -> Unit) {
+@OptIn(ExperimentalFoundationApi::class)
+private fun FolderRow(
+    name: String,
+    count: Int,
+    isSelected: Boolean = false,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+) {
     Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 12.dp),
+        modifier = Modifier.fillMaxWidth()
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .background(if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else Color.Transparent)
+            .padding(horizontal = 12.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(Icons.Filled.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Icon(
+            if (isSelected) Icons.Filled.CheckCircle else Icons.Filled.Folder,
+            contentDescription = null,
+            tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         Spacer(Modifier.width(12.dp))
         Text(name, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text("$count", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -550,15 +724,18 @@ private fun SectionTitle(title: String) {
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun FolderCard(
     name: String,
     cover: MediaItem?,
     count: Int,
     storageKinds: Set<StorageKind>,
+    isSelected: Boolean = false,
     onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
 ) {
-    Column(modifier = Modifier.clickable(onClick = onClick)) {
+    Column(modifier = Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)) {
         Box(modifier = Modifier.fillMaxWidth().aspectRatio(1f)) {
             cover?.let {
                 MediaThumbnail(
@@ -566,6 +743,15 @@ private fun FolderCard(
                     modifier = Modifier.fillMaxSize(),
                     cornerRadius = 10,
                     showVideoBadges = false,
+                )
+            }
+            if (isSelected) {
+                Box(Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp)).background(Color.Black.copy(alpha = 0.35f)))
+                Icon(
+                    Icons.Filled.CheckCircle,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(6.dp).size(24.dp),
                 )
             }
         }

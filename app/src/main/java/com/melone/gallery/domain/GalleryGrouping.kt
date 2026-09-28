@@ -99,6 +99,17 @@ object GalleryGrouping {
         return if (dir.isEmpty()) share else "$share/$dir"
     }
 
+    /**
+     * Alle Server-Items, die (rekursiv) unter [path] liegen – also direkt darin oder in
+     * einem Unterordner. Für „ganzen Ordner/Album löschen" ([serverFolder] liefert nur die
+     * direkten Dateien, nicht die aus Unterordnern).
+     */
+    fun itemsUnder(items: List<MediaItem>, path: String): List<MediaItem> {
+        if (path.isEmpty()) return items
+        val prefix = "$path/"
+        return items.filter { val f = serverFolderPath(it); f == path || f.startsWith(prefix) }
+    }
+
 
     /**
      * Natürliche Sortierung: Ziffernfolgen werden als Zahl verglichen, damit
