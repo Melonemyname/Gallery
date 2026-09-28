@@ -11,7 +11,6 @@ import coil.fetch.Fetcher
 import coil.fetch.SourceResult
 import coil.request.Options
 import com.melone.gallery.data.model.SmbVideoModel
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -29,50 +28,21 @@ class SmbVideoFetcher(
     private val smb: SmbManager,
 ) : Fetcher {
 
-    override suspend fun fetch(): FetchResult = withContext(Dispatchers.IO) {
+    override suspend fun fetch(): FetchResult = withContext(smb.fetchDispatcher) {
         val diskCache = imageLoader.diskCache
         val cacheKey = "smbvideo|${model.share}|${model.path}"
 
-        // 1) Aus Disk-Cache bedienen, falls vorhanden.
-        diskCache?.openSnapshot(cacheKey)?.let { snapshot ->
-            return@withContext SourceResult(
-                source = ImageSource(
-                    file = snapshot.data,
-                    fileSystem = diskCache.fileSystem,
-                    diskCacheKey = cacheKey,
-                    closeable = snapshot,
-                ),
-                mimeType = "image/jpeg",
-                dataSource = DataSource.DISK,
-            )
-        }
+        // 1) Aus dem Platten-Cache bedienen, falls vorhanden.
+        cachedSourceResult(diskCache, cacheKey, "image/jpeg")?.let { return@withContext it }
 
-        // 2) Frame über SMB extrahieren.
+        // 2) Einzelbild über SMB extrahieren (bleibt klein, siehe MAX_EDGE_PX).
         val bytes = extractFrameJpeg()
             ?: throw IOException("Konnte kein Video-Vorschaubild erzeugen: ${model.path}")
 
-        // 3) In den Disk-Cache schreiben (best effort).
-        if (diskCache != null) {
-            val editor = diskCache.openEditor(cacheKey)
-            if (editor != null) {
-                try {
-                    diskCache.fileSystem.write(editor.data) { write(bytes) }
-                    editor.commit()
-                    diskCache.openSnapshot(cacheKey)?.let { snapshot ->
-                        return@withContext SourceResult(
-                            source = ImageSource(
-                                file = snapshot.data,
-                                fileSystem = diskCache.fileSystem,
-                                diskCacheKey = cacheKey,
-                                closeable = snapshot,
-                            ),
-                            mimeType = "image/jpeg",
-                            dataSource = DataSource.NETWORK,
-                        )
-                    }
-                } catch (t: Throwable) {
-                    runCatching { editor.abort() }
-                }
+        // 3) In den Platten-Cache schreiben (best effort) und von dort ausliefern.
+        if (cacheBytes(diskCache, cacheKey, bytes)) {
+            cachedSourceResult(diskCache, cacheKey, "image/jpeg")?.let {
+                return@withContext SourceResult(it.source, it.mimeType, DataSource.NETWORK)
             }
         }
 
