@@ -13,8 +13,11 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -40,12 +43,17 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.DriveFileMove
+import androidx.compose.material.icons.filled.RestoreFromTrash
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Photo
+import androidx.compose.material.icons.filled.PictureInPictureAlt
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Smartphone
@@ -77,6 +85,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
@@ -100,14 +109,26 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import me.saket.telephoto.zoomable.coil.ZoomableAsyncImage
+import me.saket.telephoto.zoomable.rememberZoomableImageState
 
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * Aktionen für den Papierkorb-Modus des Viewers. Ist das gesetzt, zeigt die untere Leiste
+ * statt Bearbeiten/Info/Teilen/Löschen nur **Wiederherstellen** und **Endgültig löschen**,
+ * und das 3-Punkte-Menü oben ist ausgeblendet.
+ */
+data class TrashActions(
+    val onRestore: (MediaItem) -> Unit,
+    val onDeletePermanent: (MediaItem) -> Unit,
+)
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ViewerScreen(
     items: List<MediaItem>,
     startIndex: Int,
     onBack: () -> Unit,
     onDeleted: (MediaItem) -> Unit = {},
+    trashActions: TrashActions? = null,
 ) {
     if (items.isEmpty()) {
         LaunchedEffect(Unit) { onBack() }
@@ -132,6 +153,11 @@ fun ViewerScreen(
     // Arbeitsspeicher — sonst häufen sich dekodierte Vollbilder an und die App
     // läuft bei großen Fotos in einen OutOfMemory-Absturz.
     LaunchedEffect(pagerState.currentPage) {
+        // ERST das aktuelle Bild, dann die Nachbarn. Über SMB gibt es nur wenige
+        // gleichzeitige Leseplätze (siehe SmbManager.fetchDispatcher). Wurden die Nachbarn
+        // sofort angestoßen, standen Vorschaubild und Original des aktuellen Bildes hinten
+        // in der Schlange, und man sah so lange nur Schwarz.
+        delay(600)
         val loader = coil.Coil.imageLoader(context)
         val cur = pagerState.currentPage
         listOf(cur + 1, cur - 1, cur + 2, cur - 2).forEach { idx ->
@@ -158,8 +184,15 @@ fun ViewerScreen(
     var showDeleteConfirm by remember { mutableStateOf(false) }
     // Für die System-Dialoge (Löschen/Papierkorb): welches Item betroffen ist.
     var pendingDelete by remember { mutableStateOf<MediaItem?>(null) }
+    // Eigenes Server-Vorschaubild (Cover) setzen: läuft gerade / aktuelle Videoposition /
+    // für welches Item der Bild-Picker geöffnet wurde.
+    var thumbBusy by remember { mutableStateOf(false) }
+    var currentVideoPositionMs by remember { mutableStateOf(0L) }
+    var thumbTargetItem by remember { mutableStateOf<MediaItem?>(null) }
     // Leiste/Steuerung (oben + unten) per Berührung ein-/ausblenden.
     var chromeVisible by remember { mutableStateOf(true) }
+    // Im Bild-in-Bild-Miniplayer soll nur das Video sichtbar sein (keine Bedienelemente).
+    val effectiveChrome = chromeVisible && !PipController.inPip
     // Vollbild: hebt im Querformat die 16:9-Begrenzung des Mediums auf.
     // Das Seitenverhältnis bleibt in beiden Fällen erhalten (nie verzerrt).
     var expanded by rememberSaveable { mutableStateOf(false) }
@@ -214,6 +247,19 @@ fun ViewerScreen(
 
     fun toast(msg: String) = Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
 
+    // In den Bild-in-Bild-Miniplayer wechseln (nur Videos). Das Seitenverhältnis meldet der
+    // aktive Player über PipController; der Player läuft im PiP-Fenster weiter.
+    fun enterPip() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val activity = context.findActivityOrNull() ?: return
+        val ratio = PipController.aspectRatio ?: android.util.Rational(16, 9)
+        runCatching {
+            activity.enterPictureInPictureMode(
+                android.app.PictureInPictureParams.Builder().setAspectRatio(ratio).build(),
+            )
+        }
+    }
+
     // Ergebnis des System-Löschdialogs beim Verschieben (Original entfernen).
     val deleteLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult(),
@@ -229,12 +275,41 @@ fun ViewerScreen(
         }
     }
 
+    // Eigenes Server-Vorschaubild setzen. [produce] liefert das JPEG (aktuelles Videobild
+    // oder gewähltes Gerät-Bild). Ergebnis landet unter `.thumbs/<pfad>.jpg` auf dem Server;
+    // dieser Ordner ist in Syncthing ignoriert → wird NICHT synchronisiert, nur die App liest ihn.
+    fun setThumbnail(item: MediaItem, produce: suspend () -> ByteArray?) {
+        val share = item.smbShare ?: return
+        val path = item.smbPath ?: return
+        scope.launch {
+            thumbBusy = true
+            val jpeg = runCatching { produce() }.getOrNull()
+            val ok = jpeg != null && com.melone.gallery.data.thumb.CustomThumbnail
+                .setServerThumbnail(context, app.container.smbManager, share, path, jpeg)
+            thumbBusy = false
+            toast(if (ok) "Vorschaubild gesetzt" else "Konnte Vorschaubild nicht setzen")
+        }
+    }
+
+    // Bild vom Gerät als Cover wählen (Ergebnis siehe setThumbnail).
+    val pickThumbLauncher = rememberLauncherForActivityResult(
+        remember { PickContentQuiet() },
+    ) { uri ->
+        val item = thumbTargetItem
+        thumbTargetItem = null
+        if (uri != null && item != null) {
+            setThumbnail(item) {
+                com.melone.gallery.data.thumb.CustomThumbnail.imageToThumbJpeg(context, uri)
+            }
+        }
+    }
+
     fun deleteLocalSource(item: MediaItem) {
         val uri = Uri.parse(item.id)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             pendingDelete = item
             val pi = MediaStore.createDeleteRequest(context.contentResolver, listOf(uri))
-            deleteLauncher.launch(IntentSenderRequest.Builder(pi.intentSender).build())
+            deleteLauncher.launch(noUserActionRequest(pi.intentSender))
         } else {
             runCatching { context.contentResolver.delete(uri, null, null) }
             toast("Verschoben"); onDeleted(item); onBack()
@@ -266,7 +341,7 @@ fun ViewerScreen(
     }
 
     val treeLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocumentTree(),
+        remember { OpenTreeQuiet() },
     ) { uri ->
         val item = pendingItem
         if (uri != null && item != null) {
@@ -354,7 +429,7 @@ fun ViewerScreen(
                     // System-Papierkorb: automatische Löschung nach 30 Tagen.
                     pendingDelete = item
                     val pi = MediaStore.createTrashRequest(context.contentResolver, listOf(uri), true)
-                    trashStandaloneLauncher.launch(IntentSenderRequest.Builder(pi.intentSender).build())
+                    trashStandaloneLauncher.launch(noUserActionRequest(pi.intentSender))
                 } else {
                     runCatching { context.contentResolver.delete(uri, null, null) }
                     toast("Gelöscht"); onDeleted(item); onBack()
@@ -382,23 +457,69 @@ fun ViewerScreen(
                     VideoPage(
                         item = item,
                         isActive = isActive,
-                        chromeVisible = chromeVisible,
+                        chromeVisible = effectiveChrome,
                         onToggleChrome = { chromeVisible = !chromeVisible },
                         bottomInset = insetBottom.value,
                         leftInset = insetLeft.value,
                         rightInset = insetRight.value,
+                        onPosition = { currentVideoPositionMs = it },
                     )
                 } else {
-                    Box(modifier = Modifier.fillMaxSize()) {
+                    val zoomState = rememberZoomableImageState()
+                    // Sobald das Original wirklich angezeigt wird, blendet das Thumbnail aus.
+                    // Sonst bliebe es beim Rauszoomen bildschirmfüllend als Hintergrund stehen,
+                    // während das (kleiner gezoomte) Original davor liegt.
+                    val thumbAlpha by animateFloatAsState(
+                        targetValue = if (zoomState.isImageDisplayed) 0f else 1f,
+                        animationSpec = tween(150),
+                        label = "thumb",
+                    )
+                    // Solange das Original nicht angezeigt wird, kennt telephoto die Bildgröße
+                    // nicht und verschluckt sämtliche Berührungen: kein Antippen, kein
+                    // Weiterblättern. Deshalb bekommt es die Gesten erst, wenn es so weit ist,
+                    // und bis dahin übernimmt ein eigener Tipp-Erkenner. Der greift KEINE
+                    // Wischgesten ab, das Blättern im Pager funktioniert also weiter. Nur das
+                    // Zoomen fehlt in dieser kurzen Zeit, und das ist ohne geladenes Bild
+                    // ohnehin sinnlos.
+                    val zoomReady = zoomState.isImageDisplayed
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .then(
+                                if (zoomReady) {
+                                    Modifier
+                                } else {
+                                    Modifier.pointerInput(Unit) {
+                                        detectTapGestures { chromeVisible = !chromeVisible }
+                                    }
+                                },
+                            ),
+                    ) {
                         // Schnelles Thumbnail als Sofort-Vorschau (meist schon im Cache),
                         // darüber lädt das Original in voller Auflösung nach.
-                        coil.compose.AsyncImage(
-                            model = item.thumbModel,
-                            contentDescription = null,
-                            contentScale = androidx.compose.ui.layout.ContentScale.Fit,
-                            modifier = Modifier.fillMaxSize(),
-                        )
+                        var thumbLoaded by remember(item.id) { mutableStateOf(false) }
+                        if (thumbAlpha > 0.01f) {
+                            coil.compose.AsyncImage(
+                                model = item.thumbModel,
+                                contentDescription = null,
+                                contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                                modifier = Modifier.fillMaxSize().alpha(thumbAlpha),
+                                onState = { st ->
+                                    thumbLoaded = st is coil.compose.AsyncImagePainter.State.Success
+                                },
+                            )
+                        }
+                        // Ist weder Vorschau noch Original da, zeigte der Viewer bisher nur
+                        // eine schwarze Fläche. Ein Ladekringel sagt wenigstens, dass etwas
+                        // passiert.
+                        if (!zoomReady && !thumbLoaded) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.align(Alignment.Center),
+                                color = Color.White.copy(alpha = 0.7f),
+                            )
+                        }
                         ZoomableAsyncImage(
+                            state = zoomState,
                             model = coil.request.ImageRequest.Builder(context)
                                 .data(item.coilModel)
                                 .apply {
@@ -414,6 +535,7 @@ fun ViewerScreen(
                                 .build(),
                             contentDescription = item.displayName,
                             modifier = Modifier.fillMaxSize(),
+                            gesturesEnabled = zoomReady,
                             onClick = { chromeVisible = !chromeVisible },
                         )
                     }
@@ -421,7 +543,7 @@ fun ViewerScreen(
             }
 
             val chromeAlpha by animateFloatAsState(
-                targetValue = if (chromeVisible) 1f else 0f,
+                targetValue = if (effectiveChrome) 1f else 0f,
                 animationSpec = tween(220),
                 label = "chrome",
             )
@@ -433,15 +555,31 @@ fun ViewerScreen(
                         .landscape16by9()
                         .padding(top = insetTop.value, start = insetLeft.value, end = insetRight.value),
                     windowInsets = WindowInsets(0, 0, 0, 0),
-                    title = { Text(currentItem.displayName, color = Color.White, maxLines = 1) },
+                    title = {
+                        // Lange Titel laufen als Marquee durch (zweimal je Einblenden),
+                        // kurze bleiben statisch stehen. Dateiendung wird ausgeblendet.
+                        Text(
+                            stripDisplayExtension(currentItem.displayName),
+                            color = Color.White,
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier.basicMarquee(iterations = 2),
+                        )
+                    },
                     navigationIcon = {
                         IconButton(onClick = onBack) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Zurück", tint = Color.White)
                         }
                     },
                     actions = {
-                        if (transferring) {
+                        if (transferring || thumbBusy) {
                             CircularProgressIndicator(Modifier.width(22.dp).height(22.dp), color = Color.White, strokeWidth = 2.dp)
+                        }
+                        // Miniplayer (Bild-in-Bild) nur für Videos, direkt neben Vollbild.
+                        if (currentItem.isVideo) {
+                            IconButton(onClick = { enterPip() }) {
+                                Icon(Icons.Filled.PictureInPictureAlt, contentDescription = "Miniplayer", tint = Color.White)
+                            }
                         }
                         // Vollbild nur im Querformat sinnvoll (im Hochformat gibt es
                         // keine 16:9-Begrenzung).
@@ -454,7 +592,7 @@ fun ViewerScreen(
                                 )
                             }
                         }
-                        Box {
+                        if (trashActions == null) Box {
                             IconButton(onClick = { menuOpen = true }) {
                                 Icon(Icons.Filled.MoreVert, contentDescription = "Mehr", tint = Color.White)
                             }
@@ -484,6 +622,36 @@ fun ViewerScreen(
                                         },
                                     )
                                 }
+                                // Eigenes Vorschaubild (Cover) nur für Server-Videos: entweder das
+                                // aktuell angezeigte Videobild oder ein Bild vom Gerät. Wird NICHT
+                                // gesynct (landet im ignorierten `.thumbs`-Ordner auf dem Server).
+                                if (currentItem.source == MediaSource.SERVER && currentItem.isVideo) {
+                                    DropdownMenuItem(
+                                        text = { Text("Aktuelles Bild als Vorschau") },
+                                        leadingIcon = { Icon(Icons.Filled.Image, contentDescription = null) },
+                                        onClick = {
+                                            menuOpen = false
+                                            val item = currentItem
+                                            val pos = currentVideoPositionMs
+                                            setThumbnail(item) {
+                                                com.melone.gallery.data.thumb.CustomThumbnail
+                                                    .captureServerVideoFrame(
+                                                        app.container.smbManager,
+                                                        item.smbShare!!, item.smbPath!!, pos,
+                                                    )
+                                            }
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Bild als Vorschau wählen") },
+                                        leadingIcon = { Icon(Icons.Filled.Photo, contentDescription = null) },
+                                        onClick = {
+                                            menuOpen = false
+                                            thumbTargetItem = currentItem
+                                            pickThumbLauncher.launch("image/*")
+                                        },
+                                    )
+                                }
                             }
                         }
                     },
@@ -508,30 +676,40 @@ fun ViewerScreen(
                     color = Color.Black.copy(alpha = 0.45f),
                 ) {
                     Row(modifier = Modifier.padding(horizontal = 6.dp)) {
-                        // Bearbeiten: alle lokalen Medien (auch Videos) und Server-Bilder.
-                        // Server-Videos bleiben außen vor (müssten erst komplett geladen werden).
-                        if (currentItem.source == MediaSource.LOCAL || !currentItem.isVideo) {
-                            IconButton(onClick = { editCurrent() }) {
-                                Icon(Icons.Filled.Edit, contentDescription = "Bearbeiten", tint = Color.White)
+                        if (trashActions != null) {
+                            // Papierkorb-Modus: nur Wiederherstellen + endgültig löschen.
+                            IconButton(onClick = { trashActions.onRestore(currentItem) }) {
+                                Icon(Icons.Filled.RestoreFromTrash, contentDescription = "Wiederherstellen", tint = Color.White)
                             }
-                        }
-                        IconButton(onClick = { showInfo = !showInfo; if (showInfo) chromeVisible = true }) {
-                            Icon(Icons.Filled.Info, contentDescription = "Details", tint = Color.White)
-                        }
-                        if (sharing) {
-                            Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                                CircularProgressIndicator(Modifier.size(22.dp), color = Color.White, strokeWidth = 2.dp)
+                            IconButton(onClick = { trashActions.onDeletePermanent(currentItem) }) {
+                                Icon(Icons.Filled.DeleteForever, contentDescription = "Endgültig löschen", tint = Color.White)
                             }
                         } else {
-                            IconButton(onClick = {
-                                sharing = true
-                                scope.launch { shareMedia(context, currentItem); sharing = false }
-                            }) {
-                                Icon(Icons.Filled.Share, contentDescription = "Senden", tint = Color.White)
+                            // Bearbeiten: alle lokalen Medien (auch Videos) und Server-Bilder.
+                            // Server-Videos bleiben außen vor (müssten erst komplett geladen werden).
+                            if (currentItem.source == MediaSource.LOCAL || !currentItem.isVideo) {
+                                IconButton(onClick = { editCurrent() }) {
+                                    Icon(Icons.Filled.Edit, contentDescription = "Bearbeiten", tint = Color.White)
+                                }
                             }
-                        }
-                        IconButton(onClick = { deleteCurrent() }) {
-                            Icon(Icons.Filled.Delete, contentDescription = "Löschen", tint = Color.White)
+                            IconButton(onClick = { showInfo = !showInfo; if (showInfo) chromeVisible = true }) {
+                                Icon(Icons.Filled.Info, contentDescription = "Details", tint = Color.White)
+                            }
+                            if (sharing) {
+                                Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                                    CircularProgressIndicator(Modifier.size(22.dp), color = Color.White, strokeWidth = 2.dp)
+                                }
+                            } else {
+                                IconButton(onClick = {
+                                    sharing = true
+                                    scope.launch { shareMedia(context, currentItem); sharing = false }
+                                }) {
+                                    Icon(Icons.Filled.Share, contentDescription = "Senden", tint = Color.White)
+                                }
+                            }
+                            IconButton(onClick = { deleteCurrent() }) {
+                                Icon(Icons.Filled.Delete, contentDescription = "Löschen", tint = Color.White)
+                            }
                         }
                     }
                 }
@@ -632,6 +810,17 @@ private fun InfoRow(label: String, value: String?) {
     }
 }
 
+/**
+ * Blendet eine echte Dateiendung aus (z. B. ".mp4", ".jpg"), lässt aber Punkte im Titel
+ * selbst stehen: nur ein kurzes, rein alphanumerisches letztes Segment gilt als Endung.
+ */
+private fun stripDisplayExtension(name: String): String {
+    val dot = name.lastIndexOf('.')
+    if (dot <= 0) return name
+    val ext = name.substring(dot + 1)
+    return if (ext.length in 1..5 && ext.all { it.isLetterOrDigit() }) name.substring(0, dot) else name
+}
+
 private fun android.content.Context.findActivityOrNull(): Activity? {
     var c: android.content.Context? = this
     while (c is ContextWrapper) {
@@ -639,6 +828,31 @@ private fun android.content.Context.findActivityOrNull(): Activity? {
         c = c.baseContext
     }
     return null
+}
+
+/**
+ * System-Dialog (Löschen/Papierkorb) starten, ohne dass der automatische Miniplayer anspringt.
+ *
+ * Startet die App selbst eine fremde Activity, ruft Android vorher `onUserLeaveHint()` auf, und
+ * genau daran hängt in [MainActivity] der Wechsel in Bild-in-Bild. Für Android sieht das aus wie
+ * ein Druck auf die Home-Taste. `FLAG_ACTIVITY_NO_USER_ACTION` unterdrückt diesen Rückruf, der
+ * Miniplayer bleibt damit dem echten Verlassen der App vorbehalten.
+ */
+private fun noUserActionRequest(sender: android.content.IntentSender): IntentSenderRequest =
+    IntentSenderRequest.Builder(sender)
+        .setFlags(Intent.FLAG_ACTIVITY_NO_USER_ACTION, Intent.FLAG_ACTIVITY_NO_USER_ACTION)
+        .build()
+
+/** Wie [ActivityResultContracts.GetContent], nur ohne den Miniplayer auszulösen. */
+private class PickContentQuiet : ActivityResultContracts.GetContent() {
+    override fun createIntent(context: android.content.Context, input: String): Intent =
+        super.createIntent(context, input).addFlags(Intent.FLAG_ACTIVITY_NO_USER_ACTION)
+}
+
+/** Wie [ActivityResultContracts.OpenDocumentTree], nur ohne den Miniplayer auszulösen. */
+private class OpenTreeQuiet : ActivityResultContracts.OpenDocumentTree() {
+    override fun createIntent(context: android.content.Context, input: Uri?): Intent =
+        super.createIntent(context, input).addFlags(Intent.FLAG_ACTIVITY_NO_USER_ACTION)
 }
 
 /**
@@ -660,6 +874,7 @@ private fun openForEditing(
         val edit = Intent(Intent.ACTION_EDIT).apply {
             setDataAndType(uri, mimeType)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            addFlags(Intent.FLAG_ACTIVITY_NO_USER_ACTION)
         }
         if (runCatching { context.startActivity(edit) }.isSuccess) return true
     } else {
@@ -670,6 +885,7 @@ private fun openForEditing(
             setDataAndType(uri, mimeType)
             setPackage("com.sec.android.gallery3d")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_ACTIVITY_NO_USER_ACTION)
         }
         if (runCatching { context.startActivity(quick) }.isSuccess) return true
     }
@@ -677,6 +893,7 @@ private fun openForEditing(
     val view = Intent(Intent.ACTION_VIEW).apply {
         setDataAndType(uri, mimeType)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        addFlags(Intent.FLAG_ACTIVITY_NO_USER_ACTION)
     }
     return runCatching { context.startActivity(view) }.isSuccess
 }
@@ -726,7 +943,10 @@ private suspend fun shareMedia(context: android.content.Context, item: MediaItem
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
     withContext(Dispatchers.Main) {
-        context.startActivity(Intent.createChooser(intent, "Teilen"))
+        context.startActivity(
+            Intent.createChooser(intent, "Teilen")
+                .addFlags(Intent.FLAG_ACTIVITY_NO_USER_ACTION),
+        )
     }
 }
 
@@ -740,7 +960,10 @@ private suspend fun setAsWallpaper(context: android.content.Context, item: Media
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
     withContext(Dispatchers.Main) {
-        context.startActivity(Intent.createChooser(intent, "Als Hintergrund festlegen"))
+        context.startActivity(
+            Intent.createChooser(intent, "Als Hintergrund festlegen")
+                .addFlags(Intent.FLAG_ACTIVITY_NO_USER_ACTION),
+        )
     }
 }
 
