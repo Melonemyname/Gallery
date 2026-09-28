@@ -64,20 +64,24 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Kachel im Raster mit Auswahl-Overlay (Timeline + Alben). */
-@OptIn(ExperimentalFoundationApi::class)
+/**
+ * Kachel im Raster mit Auswahl-Overlay (Timeline + Alben).
+ *
+ * Bewusst **ohne** eigenes `onLongClick`: Das lange Halten gehört zur Wischauswahl, die als
+ * Geste am Raster selbst hängt (siehe [dragSelect]). Hätte die Kachel ein eigenes, würde sie
+ * das lange Halten verschlucken und der Wisch käme nie zustande.
+ */
 @Composable
 fun SelectableThumb(
     item: MediaItem,
     isSelected: Boolean,
     showVideoBadges: Boolean = true,
     onClick: (MediaItem) -> Unit,
-    onLong: (MediaItem) -> Unit,
 ) {
     Box(
         modifier = Modifier
             .aspectRatio(1f)
-            .combinedClickable(onClick = { onClick(item) }, onLongClick = { onLong(item) }),
+            .clickable { onClick(item) },
     ) {
         MediaThumbnail(
             item = item,
