@@ -1,5 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Sicherung bis Android 11 (Cloud und Gerätewechsel). Nichts, was den Server verrät:
+  Zugangsdaten, Host/Benutzer/Freigaben (DataStore), Dateiliste des Servers, gemerkte
+  Pfade (Wiedergabeposition, laufende Bearbeitung). Ab Android 12 gilt
+  data_extraction_rules.xml.
+-->
 <full-backup-content>
-    <!-- Verschlüsselte Credentials nicht sichern -->
     <exclude domain="sharedpref" path="secure_credentials.xml" />
+    <exclude domain="sharedpref" path="edit_watch.xml" />
+    <exclude domain="sharedpref" path="playback_positions.xml" />
+    <exclude domain="file" path="datastore/gallery_settings.preferences_pb" />
+    <exclude domain="file" path="server_cache.json" />
 </full-backup-content>

@@ -1,9 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Ab Android 12. Cloud-Sicherung (Google-Konto): nichts, was den Server verrät, also weder
+  Zugangsdaten noch Host/Benutzer/Freigaben (DataStore gallery_settings), Dateiliste des
+  Servers (server_cache.json) oder gemerkte Server-Pfade (Wiedergabeposition, laufende
+  Bearbeitung). Gerätewechsel (direkt von Handy zu Handy): Einstellungen samt Serverdaten
+  dürfen mit, nur das Passwort nicht (ließe sich auf dem neuen Gerät ohnehin nicht
+  entschlüsseln, der Schlüssel liegt im Keystore des alten).
+-->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="sharedpref" path="secure_credentials.xml" />
+        <exclude domain="sharedpref" path="edit_watch.xml" />
+        <exclude domain="sharedpref" path="playback_positions.xml" />
+        <exclude domain="file" path="datastore/gallery_settings.preferences_pb" />
+        <exclude domain="file" path="server_cache.json" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="secure_credentials.xml" />
+        <exclude domain="sharedpref" path="edit_watch.xml" />
     </device-transfer>
 </data-extraction-rules>
