@@ -12,6 +12,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.ExitTransition
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.layout.onSizeChanged
@@ -138,24 +140,38 @@ fun GalleryApp() {
     // Bewusst hier (App-Ebene) und über einen dauerhaften Vermerk, weil Android die App
     // beenden kann, während der Editor läuft.
     var editedFound by remember {
-        mutableStateOf<Pair<com.melone.gallery.ui.edit.EditWatchStore.Entry, android.net.Uri>?>(null)
+        mutableStateOf<Pair<com.melone.gallery.ui.edit.EditWatchStore.Entry, com.melone.gallery.ui.edit.EditedImage>?>(null)
     }
     var editUploading by remember { mutableStateOf(false) }
+    var editSearching by remember { mutableStateOf(false) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         val entry = com.melone.gallery.ui.edit.EditWatchStore.load(context)
-        if (entry != null && editedFound == null) {
+        if (entry != null && editedFound == null && !editSearching) {
+            editSearching = true
             scope.launch {
-                // Die Medienbibliothek kennt die neue Datei oft erst Sekunden später.
-                repeat(12) {
-                    val found = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                        com.melone.gallery.ui.edit.findEditedImage(context, entry)
+                // Die Medienbibliothek kennt die neue Datei oft erst Sekunden später. Ein
+                // unsicherer Treffer (nur „irgendein neues Bild") wird erst am Ende genommen,
+                // falls bis dahin kein sicher zugeordneter auftaucht.
+                var fallback: com.melone.gallery.ui.edit.EditedImage? = null
+                try {
+                    repeat(12) {
+                        val found = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            com.melone.gallery.ui.edit.findEditedImage(context, entry)
+                        }
+                        if (found?.certain == true) {
+                            com.melone.gallery.ui.edit.EditWatchStore.clear(context)
+                            editedFound = entry to found
+                            return@launch
+                        }
+                        if (found != null) fallback = found
+                        delay(800)
                     }
-                    if (found != null) {
+                    fallback?.let {
                         com.melone.gallery.ui.edit.EditWatchStore.clear(context)
-                        editedFound = entry to found
-                        return@launch
+                        editedFound = entry to it
                     }
-                    delay(800)
+                } finally {
+                    editSearching = false
                 }
             }
         }
@@ -171,7 +187,8 @@ fun GalleryApp() {
         galleryVm.refresh()
     }
 
-    editedFound?.let { (entry, editedUri) ->
+    editedFound?.let { (entry, edited) ->
+        val editedUri = edited.uri
         fun upload(overwrite: Boolean) {
             editedFound = null
             scope.launch {
@@ -184,7 +201,7 @@ fun GalleryApp() {
                     context,
                     when {
                         !ok -> "Speichern auf dem Server fehlgeschlagen"
-                        overwrite -> "Original auf dem Server ersetzt"
+                        overwrite -> "Original auf dem Server ersetzt (altes im Papierkorb)"
                         else -> "Als Kopie auf dem Server gespeichert"
                     },
                     Toast.LENGTH_SHORT,
@@ -208,7 +225,9 @@ fun GalleryApp() {
                     // ein eigener Eintrag) die von uns abgelegte Ausgangskopie.
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                         val uris = buildList {
-                            add(editedUri)
+                            // Ein unsicherer Treffer kann ein fremdes Bild sein (Screenshot,
+                            // Kamera): das bleibt liegen, nur unsere Ausgangskopie geht weg.
+                            if (edited.certain) add(editedUri)
                             val own = android.content.ContentUris.withAppendedId(
                                 android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                                 entry.savedId,
@@ -227,11 +246,29 @@ fun GalleryApp() {
             onDismissRequest = { editedFound = null },
             title = { Text("Bearbeitete Datei gefunden") },
             text = {
-                Text(
-                    "„${entry.displayName}\" wurde bearbeitet. Auf den Server zurückschieben?\n\n" +
-                        "Ersetzen: überschreibt das Original auf dem Server.\n" +
-                        "Als Kopie: legt es als „…_bearbeitet\" daneben, Original bleibt.",
-                )
+                androidx.compose.foundation.layout.Column {
+                    // Vorschau: So sieht man, welches Bild wirklich hochgeladen würde.
+                    coil.compose.AsyncImage(
+                        model = editedUri,
+                        contentDescription = "Vorschau der bearbeiteten Datei",
+                        contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(220.dp)
+                            .padding(bottom = 12.dp),
+                    )
+                    Text(
+                        if (edited.certain) {
+                            "„${entry.displayName}\" wurde bearbeitet. Auf den Server zurückschieben?\n\n" +
+                                "Ersetzen: tauscht das Original auf dem Server aus, das alte landet im Papierkorb.\n" +
+                                "Als Kopie: legt es als „…_bearbeitet\" daneben, Original bleibt."
+                        } else {
+                            "Dieses Bild ist neu auf dem Gerät, ließ sich aber nicht sicher der Bearbeitung " +
+                                "von „${entry.displayName}\" zuordnen. Bitte anhand der Vorschau prüfen.\n\n" +
+                                "Es kann nur als Kopie („…_bearbeitet\") neben dem Original gespeichert werden."
+                        },
+                    )
+                }
             },
             confirmButton = {
                 androidx.compose.material3.TextButton(onClick = { upload(false) }) { Text("Als Kopie") }
@@ -242,7 +279,10 @@ fun GalleryApp() {
                         com.melone.gallery.ui.edit.EditWatchStore.clear(context)
                         editedFound = null
                     }) { Text("Abbrechen") }
-                    androidx.compose.material3.TextButton(onClick = { upload(true) }) { Text("Ersetzen") }
+                    // Ersetzen nur, wenn der Treffer eindeutig zu dieser Bearbeitung gehört.
+                    if (edited.certain) {
+                        androidx.compose.material3.TextButton(onClick = { upload(true) }) { Text("Ersetzen") }
+                    }
                 }
             },
         )

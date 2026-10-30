@@ -1,10 +1,12 @@
 package com.melone.gallery.data.smb
 
 import com.hierynomus.msdtyp.AccessMask
+import com.hierynomus.mserref.NtStatus
 import com.hierynomus.msfscc.FileAttributes
 import com.hierynomus.msfscc.fileinformation.FileIdBothDirectoryInformation
 import com.hierynomus.mssmb2.SMB2CreateDisposition
 import com.hierynomus.mssmb2.SMB2ShareAccess
+import com.hierynomus.mssmb2.SMBApiException
 import com.hierynomus.protocol.commons.EnumWithValue.EnumUtils
 import com.hierynomus.smbj.SMBClient
 import com.hierynomus.smbj.SmbConfig
@@ -34,6 +36,9 @@ data class SmbEntry(
     val sizeBytes: Long,
     val lastModified: Long,
 )
+
+/** Ziel existiert schon; [SmbManager.createNewFile] überschreibt nie. */
+class SmbNameCollisionException(path: String) : java.io.IOException("Datei existiert bereits: $path")
 
 /** Ein Eintrag im Server-Papierkorb (.trash). */
 data class SmbTrashEntry(
@@ -201,21 +206,37 @@ class SmbManager {
         )
     }
 
-    /** Schreibt/überschreibt eine Datei streamend aus [input]. */
-    fun writeFile(shareName: String, path: String, input: java.io.InputStream) {
+    /**
+     * Legt eine NEUE Datei an und schreibt [input] streamend hinein. Gibt es unter [path]
+     * schon etwas, wird nichts angefasst und [SmbNameCollisionException] geworfen
+     * (`FILE_CREATE` statt Überschreiben: so kann Kopieren/Verschieben nie eine vorhandene
+     * Datei kürzen, auch nicht die Quelle selbst). Bricht das Schreiben ab, wird die
+     * angefangene Datei wieder entfernt. Ergebnis: geschriebene Bytes.
+     */
+    fun createNewFile(shareName: String, path: String, input: java.io.InputStream): Long {
         val ds = shareLocked(shareName)
-        val f = ds.openFile(
-            normalize(path),
-            EnumSet.of(AccessMask.GENERIC_WRITE),
-            null,
-            SMB2ShareAccess.ALL,
-            SMB2CreateDisposition.FILE_OVERWRITE_IF,
-            null,
-        )
+        val smbPath = normalize(path)
+        val f = try {
+            ds.openFile(
+                smbPath,
+                EnumSet.of(AccessMask.GENERIC_WRITE),
+                null,
+                SMB2ShareAccess.ALL,
+                SMB2CreateDisposition.FILE_CREATE,
+                null,
+            )
+        } catch (e: SMBApiException) {
+            if (e.status == NtStatus.STATUS_OBJECT_NAME_COLLISION) throw SmbNameCollisionException(path)
+            throw e
+        }
+        var complete = false
         try {
-            f.outputStream.use { out -> input.copyTo(out) }
+            val written = f.outputStream.use { out -> input.copyTo(out) }
+            complete = true
+            return written
         } finally {
             runCatching { f.close() }
+            if (!complete) runCatching { ds.rm(smbPath) }
         }
     }
 
@@ -259,9 +280,10 @@ class SmbManager {
     /**
      * Verschiebt eine Datei server-seitig in den Papierkorb ".trash" der Freigabe
      * (schnell, kein Datentransfer). Dateiname wird mit [trashMillis] präfixiert, damit
-     * [purgeTrash] das Papierkorb-Datum kennt.
+     * [purgeTrash] das Papierkorb-Datum kennt. Ergebnis: Name im Papierkorb (für
+     * [restoreFromTrash]).
      */
-    fun moveToTrash(shareName: String, path: String, trashMillis: Long) {
+    fun moveToTrash(shareName: String, path: String, trashMillis: Long): String {
         val ds = shareLocked(shareName)
         runCatching { ds.mkdir(".trash") }
         val rel = path.trim().trim('/')
@@ -277,11 +299,13 @@ class SmbManager {
             SMB2CreateDisposition.FILE_OPEN,
             null,
         )
+        val trashName = "${trashMillis}_$encoded"
         try {
-            f.rename(".trash\\${trashMillis}_$encoded", true)
+            f.rename(".trash\\$trashName", true)
         } finally {
             runCatching { f.close() }
         }
+        return trashName
     }
 
     /** Listet den Papierkorb einer Freigabe (Originalpfad wird dekodiert). */

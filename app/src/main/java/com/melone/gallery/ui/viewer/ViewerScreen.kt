@@ -89,7 +89,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
-import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -99,6 +98,7 @@ import com.melone.gallery.GalleryApplication
 import com.melone.gallery.data.model.MediaItem
 import com.melone.gallery.data.model.MediaSource
 import com.melone.gallery.data.settings.ServerFolder
+import com.melone.gallery.data.transfer.SameFolderException
 import com.melone.gallery.data.transfer.TransferTarget
 import com.melone.gallery.domain.MediaDetails
 import com.melone.gallery.ui.AppViewModelFactories
@@ -107,7 +107,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 import me.saket.telephoto.zoomable.coil.ZoomableAsyncImage
 import me.saket.telephoto.zoomable.rememberZoomableImageState
 
@@ -321,12 +320,17 @@ fun ViewerScreen(
             transferring = true
             val res = transfer.copy(item, target)
             transferring = false
-            if (res.isFailure) {
-                toast("Fehler: ${res.exceptionOrNull()?.message ?: "unbekannt"}")
+            val result = res.getOrElse { e ->
+                toast(
+                    if (e is SameFolderException) "${e.message}, nichts geändert"
+                    else "Fehler: ${e.message ?: "unbekannt"}",
+                )
                 return@launch
             }
+            // Gab es den Namen im Ziel schon, liegt die Kopie unter einem freien Namen.
+            if (result.renamed) toast("Im Ziel gespeichert als „${result.fileName}“")
             if (!move) {
-                toast("Kopiert")
+                if (!result.renamed) toast("Kopiert")
                 return@launch
             }
             when (item.source) {
@@ -898,41 +902,9 @@ private fun openForEditing(
     return runCatching { context.startActivity(view) }.isSuccess
 }
 
-/** Lädt eine Server-Datei in den lokalen Cache (für Bearbeiten). */
-private fun cacheServerFile(context: android.content.Context, item: MediaItem): File? = runCatching {
-    val app = context.applicationContext as GalleryApplication
-    val dir = File(context.cacheDir, "shared").apply { mkdirs() }
-    val out = File(dir, item.displayName)
-    val f = app.container.smbManager.openFile(item.smbShare!!, item.smbPath!!)
-    try {
-        f.inputStream.use { input -> out.outputStream().use { output -> input.copyTo(output) } }
-    } finally {
-        runCatching { f.close() }
-    }
-    out
-}.getOrNull()
-
 /** Liefert eine teilbare content-URI. Server-Dateien werden vorher in den Cache kopiert. */
 private suspend fun localContentUri(context: android.content.Context, item: MediaItem): Uri? =
-    when (item.source) {
-        MediaSource.LOCAL -> Uri.parse(item.id)
-        MediaSource.SERVER -> withContext(Dispatchers.IO) {
-            val app = context.applicationContext as GalleryApplication
-            runCatching {
-                val dir = File(context.cacheDir, "shared").apply { mkdirs() }
-                val out = File(dir, item.displayName)
-                val f = app.container.smbManager.openFile(item.smbShare!!, item.smbPath!!)
-                try {
-                    f.inputStream.use { input ->
-                        out.outputStream().use { output -> input.copyTo(output) }
-                    }
-                } finally {
-                    runCatching { f.close() }
-                }
-                FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", out)
-            }.getOrNull()
-        }
-    }
+    com.melone.gallery.ui.components.sharedContentUri(context, item)
 
 /** Teilt lokal per content-URI, Server-Dateien werden vorher in den Cache geladen. */
 private suspend fun shareMedia(context: android.content.Context, item: MediaItem) {

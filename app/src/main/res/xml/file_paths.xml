@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
-    <!-- Für lokale Medien -->
-    <external-path name="external_files" path="." />
-    <!-- Server-Dateien werden vor dem Teilen hierhin gecacht -->
+    <!--
+      Einziger freigegebener Ordner: Server-Dateien werden vor dem Teilen hierhin gecacht
+      (siehe sharedContentUri). Lokale Medien laufen direkt über ihre content://-URI und
+      brauchen keinen Eintrag; weitere Pfade würden nur unnötig viel freigeben.
+    -->
     <cache-path name="shared_cache" path="shared/" />
-    <files-path name="internal_files" path="." />
 </paths>

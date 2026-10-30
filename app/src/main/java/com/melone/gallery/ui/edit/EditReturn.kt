@@ -87,57 +87,87 @@ fun saveServerImageToGallery(context: Context, share: String, path: String, disp
     }.getOrNull()
 
 /**
- * Sucht die vom Editor erzeugte Datei. Deckt beide Samsung-Wege ab: Original
- * überschreiben (gleicher Name, geänderte Datei) und als Kopie speichern
- * (neuer Eintrag bzw. Name mit angehängtem „(1)").
+ * Vom Editor erzeugte Datei. [certain] heißt: sicher dieser Bearbeitung zugeordnet
+ * (unsere abgelegte Kopie wurde überschrieben, oder genau eine neue Datei mit ihrem
+ * Namen liegt im selben Ordner). Sonst ist es nur das jüngste neue Bild, und das kann
+ * auch ein Screenshot oder Kamerafoto aus der Zwischenzeit sein; dann bietet der Dialog
+ * nur „Als Kopie" an, damit nie ein fremdes Bild das Server-Original ersetzt.
  */
-fun findEditedImage(context: Context, entry: EditWatchStore.Entry): Uri? = runCatching {
-    val resolver = context.contentResolver
+data class EditedImage(val uri: Uri, val certain: Boolean)
 
-    // 1) Neu hinzugekommenes Bild seit Beginn der Bearbeitung (ohne unsere Kopie).
+/**
+ * Sucht die vom Editor erzeugte Datei. Deckt beide Samsung-Wege ab: Original
+ * überschreiben (gleicher Eintrag, geänderte Datei) und als Kopie speichern
+ * (neuer Eintrag, Name mit angehängtem „(1)"). Erst danach, als unsicherer Treffer,
+ * irgendein neues Bild seit Beginn der Bearbeitung.
+ */
+fun findEditedImage(context: Context, entry: EditWatchStore.Entry): EditedImage? = runCatching {
+    val resolver = context.contentResolver
+    val images = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+    fun uriOf(id: Long) = ContentUris.withAppendedId(images, id)
+
+    // 1) Unsere Kopie selbst wurde überschrieben (Samsung „Speichern").
+    // Name und Ordner unserer Kopie merken: Die Medienbibliothek kann den Namen beim
+    // Ablegen selbst geändert haben, wenn es ihn dort schon gab.
+    var ownName = entry.displayName
+    var ownFolder: String? = null
+    val folderCol = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+        MediaStore.Images.Media.RELATIVE_PATH
+    } else {
+        null
+    }
     resolver.query(
-        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-        arrayOf(MediaStore.Images.Media._ID),
-        "${MediaStore.Images.Media.DATE_ADDED} >= ?",
-        arrayOf(entry.startSec.toString()),
-        "${MediaStore.Images.Media.DATE_ADDED} DESC",
+        uriOf(entry.savedId),
+        listOfNotNull(MediaStore.Images.Media.DATE_MODIFIED, MediaStore.Images.Media.DISPLAY_NAME, folderCol)
+            .toTypedArray(),
+        null, null, null,
     )?.use { c ->
-        val idCol = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-        while (c.moveToNext()) {
-            val id = c.getLong(idCol)
-            if (id != entry.savedId) {
-                return@runCatching ContentUris
-                    .withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
-            }
+        if (c.moveToFirst()) {
+            c.getString(1)?.let { ownName = it }
+            if (folderCol != null) ownFolder = c.getString(2)
+            if (c.getLong(0) > entry.startSec + 5) return@runCatching EditedImage(uriOf(entry.savedId), certain = true)
         }
     }
 
-    // 2) Gleicher/ähnlicher Name: überschriebene Kopie oder "name(1).jpg".
-    val dot = entry.displayName.lastIndexOf('.')
-    val base = if (dot > 0) entry.displayName.substring(0, dot) else entry.displayName
-    resolver.query(
-        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-        arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DATE_MODIFIED),
-        "${MediaStore.Images.Media.DISPLAY_NAME} LIKE ?",
-        arrayOf("$base%"),
-        "${MediaStore.Images.Media.DATE_MODIFIED} DESC",
-    )?.use { c ->
-        val idCol = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-        val modCol = c.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_MODIFIED)
-        while (c.moveToNext()) {
-            val id = c.getLong(idCol)
-            if (id != entry.savedId || c.getLong(modCol) > entry.startSec + 5) {
-                return@runCatching ContentUris
-                    .withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+    // 2) Neue Datei mit dem Namen unserer Kopie im selben Ordner ("name(1).jpg" o. ä.).
+    val dot = ownName.lastIndexOf('.')
+    val base = if (dot > 0) ownName.substring(0, dot) else ownName
+    val folder = ownFolder
+    if (folderCol != null && folder != null) {
+        val pattern = Regex("^" + Regex.escape(base) + "(?:[ _]?\\(\\d+\\)|_\\d+)?\\.[^.]+$", RegexOption.IGNORE_CASE)
+        val matches = ArrayList<Long>()
+        resolver.query(
+            images,
+            arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DISPLAY_NAME),
+            "${MediaStore.Images.Media.DATE_ADDED} >= ? AND $folderCol = ? AND ${MediaStore.Images.Media._ID} != ?",
+            arrayOf(entry.startSec.toString(), folder, entry.savedId.toString()),
+            null,
+        )?.use { c ->
+            while (c.moveToNext()) {
+                if (pattern.matches(c.getString(1) ?: continue)) matches += c.getLong(0)
             }
         }
+        if (matches.size == 1) return@runCatching EditedImage(uriOf(matches[0]), certain = true)
+    }
+
+    // 3) Unsicher: jüngstes neues Bild seit Beginn der Bearbeitung (ohne unsere Kopie).
+    resolver.query(
+        images,
+        arrayOf(MediaStore.Images.Media._ID),
+        "${MediaStore.Images.Media.DATE_ADDED} >= ? AND ${MediaStore.Images.Media._ID} != ?",
+        arrayOf(entry.startSec.toString(), entry.savedId.toString()),
+        "${MediaStore.Images.Media.DATE_ADDED} DESC",
+    )?.use { c ->
+        if (c.moveToFirst()) return@runCatching EditedImage(uriOf(c.getLong(0)), certain = false)
     }
     null
 }.getOrNull()
 
 /**
- * Schreibt die bearbeitete Datei auf den Server: über das Original ([overwrite])
- * oder als „<name>_bearbeitet.<ext>" daneben.
+ * Schreibt die bearbeitete Datei auf den Server: anstelle des Originals ([overwrite])
+ * oder als „<name>_bearbeitet.<ext>" daneben. Überschrieben wird dabei nie etwas:
+ * Beim Ersetzen wandert das Original zuerst in den Server-Papierkorb (dort
+ * wiederherstellbar), bei der Kopie bekommt ein schon vorhandener Name einen Zähler.
  */
 fun uploadEditedToServer(
     context: Context,
@@ -146,28 +176,50 @@ fun uploadEditedToServer(
     overwrite: Boolean,
 ): Boolean = runCatching {
     val app = context.applicationContext as GalleryApplication
-    val target = if (overwrite) {
-        entry.path
-    } else {
-        val dot = entry.displayName.lastIndexOf('.')
-        val base = if (dot > 0) entry.displayName.substring(0, dot) else entry.displayName
-        val ext = if (dot > 0) entry.displayName.substring(dot) else ".jpg"
-        val dir = entry.path.substringBeforeLast('/', "")
-        (if (dir.isEmpty()) "" else "$dir/") + base + "_bearbeitet" + ext
-    }
-    context.contentResolver.openInputStream(edited)?.use { input ->
-        app.container.smbManager.writeFile(entry.share, target, input)
-    } ?: error("Konnte die bearbeitete Datei nicht lesen")
-
-    // Beim Ersetzen ist das server-seitig vorgenerierte Vorschaubild veraltet: löschen,
-    // sonst zeigt die App weiter die alte Fassung. Das Server-Skript legt es neu an.
-    if (overwrite) {
-        runCatching {
-            app.container.smbManager.deleteFile(
-                entry.share,
-                com.melone.gallery.data.smb.SmbThumbFetcher.serverThumbPath(entry.path),
-            )
+    val smb = app.container.smbManager
+    val resolver = context.contentResolver
+    fun write(path: String): Long {
+        val written = resolver.openInputStream(edited)?.use { input -> smb.createNewFile(entry.share, path, input) }
+            ?: error("Konnte die bearbeitete Datei nicht lesen")
+        if (smb.fileSize(entry.share, path) != written) {
+            runCatching { smb.deleteFile(entry.share, path) }
+            error("Datei auf dem Server unvollständig")
         }
+        return written
+    }
+
+    if (overwrite) {
+        val trashName = smb.moveToTrash(entry.share, entry.path, System.currentTimeMillis())
+        try {
+            write(entry.path)
+        } catch (e: Exception) {
+            // Original zurückholen, damit am Ende nicht beides fehlt.
+            runCatching { smb.restoreFromTrash(entry.share, trashName, entry.path) }
+            throw e
+        }
+        // Das server-seitig vorgenerierte Vorschaubild ist veraltet: löschen, sonst zeigt
+        // die App weiter die alte Fassung. Das Server-Skript legt es neu an.
+        runCatching {
+            smb.deleteFile(entry.share, com.melone.gallery.data.smb.SmbThumbFetcher.serverThumbPath(entry.path))
+        }
+    } else {
+        val name = com.melone.gallery.data.transfer.FileNames.sanitize(entry.displayName)
+        val dot = name.lastIndexOf('.')
+        val base = if (dot > 0) name.substring(0, dot) else name
+        val ext = if (dot > 0) name.substring(dot) else ".jpg"
+        val dir = entry.path.substringBeforeLast('/', "")
+        val copyName = base + "_bearbeitet" + ext
+        val stored = (0..999).firstNotNullOfOrNull { n ->
+            val candidate = if (n == 0) copyName else com.melone.gallery.data.transfer.FileNames.numbered(copyName, n)
+            val path = (if (dir.isEmpty()) "" else "$dir/") + candidate
+            if (smb.fileExists(entry.share, path)) return@firstNotNullOfOrNull null
+            try {
+                write(path)
+            } catch (_: com.melone.gallery.data.smb.SmbNameCollisionException) {
+                null
+            }
+        }
+        stored ?: error("Kein freier Dateiname für die Kopie")
     }
     true
 }.getOrDefault(false)

@@ -58,6 +58,8 @@ import com.melone.gallery.GalleryApplication
 import com.melone.gallery.data.model.MediaItem
 import com.melone.gallery.data.model.MediaSource
 import com.melone.gallery.data.settings.ServerFolder
+import com.melone.gallery.data.transfer.FileNames
+import com.melone.gallery.data.transfer.SameFolderException
 import com.melone.gallery.data.transfer.TransferTarget
 import com.melone.gallery.ui.gallery.GalleryViewModel
 import kotlinx.coroutines.Dispatchers
@@ -161,20 +163,41 @@ fun BoxScope.SelectionActionsBar(
         val items = selectedItems
         scope.launch {
             var ok = 0
+            var renamed = 0
+            var sameFolder = 0
+            var failed = 0
             val localMoveIds = mutableListOf<String>()
             items.forEach { item ->
-                if (transfer.copy(item, target).isSuccess) {
-                    ok++
-                    if (move) when (item.source) {
-                        MediaSource.SERVER -> {
-                            transfer.trashServerSource(item, System.currentTimeMillis())
+                val res = transfer.copy(item, target)
+                val result = res.getOrNull()
+                if (result == null) {
+                    // Quelle bleibt in beiden Fällen unangetastet.
+                    if (res.exceptionOrNull() is SameFolderException) sameFolder++ else failed++
+                    return@forEach
+                }
+                ok++
+                if (result.renamed) renamed++
+                // Quelle erst entfernen, wenn die Kopie geprüft im Ziel liegt (siehe copy).
+                if (move) when (item.source) {
+                    MediaSource.SERVER -> {
+                        if (transfer.trashServerSource(item, System.currentTimeMillis()).isSuccess) {
                             viewModel.removeServerItems(setOf(item.id))
                         }
-                        MediaSource.LOCAL -> localMoveIds += item.id
                     }
+                    MediaSource.LOCAL -> localMoveIds += item.id
                 }
             }
-            toast(if (move) "$ok verschoben" else "$ok kopiert")
+            val parts = buildList {
+                add(if (move) "$ok verschoben" else "$ok kopiert")
+                if (renamed > 0) add("$renamed mit neuem Namen, weil schon vorhanden")
+                if (sameFolder > 0) add("$sameFolder lagen schon in diesem Ordner")
+                if (failed > 0) add("$failed fehlgeschlagen")
+            }
+            Toast.makeText(
+                context,
+                parts.joinToString(", "),
+                if (parts.size > 1) Toast.LENGTH_LONG else Toast.LENGTH_SHORT,
+            ).show()
             if (move && localMoveIds.isNotEmpty() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 pendingLocalIds = localMoveIds
                 // Endgültig vom Gerät löschen (nicht in den Papierkorb).
@@ -272,15 +295,17 @@ fun BoxScope.SelectionActionsBar(
     }
 }
 
-/** content-URI zum Teilen (lokal direkt, Server über Cache-Kopie). */
+/**
+ * content-URI zum Teilen, für Hintergrundbild und Co. (lokal direkt, Server über eine
+ * Cache-Kopie). Einzige Stelle, an der Server-Dateien für fremde Apps abgelegt werden.
+ */
 internal suspend fun sharedContentUri(context: android.content.Context, item: MediaItem): Uri? =
     when (item.source) {
         MediaSource.LOCAL -> Uri.parse(item.id)
         MediaSource.SERVER -> withContext(Dispatchers.IO) {
             val app = context.applicationContext as GalleryApplication
             runCatching {
-                val dir = java.io.File(context.cacheDir, "shared").apply { mkdirs() }
-                val out = java.io.File(dir, item.displayName)
+                val out = sharedCacheFile(context, item)
                 val f = app.container.smbManager.openFile(item.smbShare!!, item.smbPath!!)
                 try {
                     f.inputStream.use { i -> out.outputStream().use { o -> i.copyTo(o) } }
@@ -291,3 +316,18 @@ internal suspend fun sharedContentUri(context: android.content.Context, item: Me
             }.getOrNull()
         }
     }
+
+/**
+ * Ablageort der Cache-Kopie unter `cache/shared/` (der einzige Ordner, den der
+ * FileProvider freigibt). Je Medium ein eigener Unterordner, damit zwei gleichnamige
+ * Dateien aus verschiedenen Server-Ordnern einander nicht überschreiben; der Dateiname
+ * selbst bleibt erhalten (die Ziel-App zeigt ihn an), wird aber über [FileNames.childFile]
+ * auf einen reinen Namen ohne Ordneranteil geprüft. Kopien älter als einen Tag fliegen raus.
+ */
+private fun sharedCacheFile(context: android.content.Context, item: MediaItem): java.io.File {
+    val root = java.io.File(context.cacheDir, "shared").apply { mkdirs() }
+    val cutoff = System.currentTimeMillis() - 24 * 3600 * 1000L
+    root.listFiles()?.forEach { if (it.lastModified() < cutoff) it.deleteRecursively() }
+    val dir = java.io.File(root, Integer.toHexString(item.id.hashCode())).apply { mkdirs() }
+    return FileNames.childFile(dir, item.displayName)
+}
